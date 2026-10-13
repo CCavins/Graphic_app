@@ -4,6 +4,7 @@ import { applyCanvasStyle } from '../../model/factory'
 import { inchesPerBaseUnit, parseLength } from '../../model/units'
 import { IDENTITY_STEP } from '../../model/transform'
 import { editor } from '../instance'
+import { OrgIcon } from '../icons'
 import { ColorWell, Field, guarded, Row, Section } from '../ui'
 
 const LABEL_UNITS: LabelUnit[] = ['px', 'in', 'ft', 'ft-in', 'yd', 'mi', 'mm', 'cm', 'm', 'km']
@@ -167,23 +168,40 @@ export function PropertiesPanel() {
         {node && !labels.length && <p className="hint">Select an object and add a label. Width sits above, height on the left, size on top.</p>}
       </Section>
       <Section title="Align" testId="section-align" defaultOpen={false}>
-        <Row wrap>
-          {(['left', 'center', 'right', 'top', 'middle', 'bottom'] as const).map((mode) => (
-            <button key={mode} data-testid={`align-${mode}`} onClick={() => editor.align(mode)}>{mode}</button>
+        <div className="org-bar" role="group" aria-label="Align">
+          {([
+            ['left', 'align-left', 'Align left'],
+            ['center', 'align-center', 'Align center'],
+            ['right', 'align-right', 'Align right'],
+            ['top', 'align-top', 'Align top'],
+            ['middle', 'align-middle', 'Align middle'],
+            ['bottom', 'align-bottom', 'Align bottom'],
+          ] as const).map(([mode, icon, label]) => (
+            <button key={mode} className="org" data-testid={`align-${mode}`} title={label} aria-label={label} onClick={() => editor.align(mode)}>
+              <OrgIcon name={icon} />
+            </button>
           ))}
-        </Row>
-        <Row wrap>
-          <button data-testid="distribute" onClick={() => editor.distribute('h')}>Distribute H</button>
-          <button onClick={() => editor.distribute('v')}>Distribute V</button>
-          <button data-testid="flip" onClick={() => editor.flip('h')}>Flip H</button>
-          <button onClick={() => editor.flip('v')}>Flip V</button>
-        </Row>
-        <Row wrap>
-          <button onClick={() => editor.arrange('front')}>To front</button>
-          <button onClick={() => editor.arrange('forward')}>Forward</button>
-          <button onClick={() => editor.arrange('backward')}>Backward</button>
-          <button onClick={() => editor.arrange('back')}>To back</button>
-        </Row>
+        </div>
+        <div className="org-bar" role="group" aria-label="Distribute, flip, and group">
+          <button className="org" data-testid="distribute" title="Distribute horizontally" aria-label="Distribute horizontally" onClick={() => editor.distribute('h')}><OrgIcon name="distribute-h" /></button>
+          <button className="org" title="Distribute vertically" aria-label="Distribute vertically" onClick={() => editor.distribute('v')}><OrgIcon name="distribute-v" /></button>
+          <button className="org" data-testid="flip" title="Flip horizontal" aria-label="Flip horizontal" onClick={() => editor.flip('h')}><OrgIcon name="flip-h" /></button>
+          <button className="org" title="Flip vertical" aria-label="Flip vertical" onClick={() => editor.flip('v')}><OrgIcon name="flip-v" /></button>
+          <button className="org" title="Group" aria-label="Group" onClick={() => editor.group()}><OrgIcon name="group" /></button>
+          <button className="org" title="Ungroup" aria-label="Ungroup" onClick={() => editor.ungroup()}><OrgIcon name="ungroup" /></button>
+        </div>
+        <div className="org-bar" role="group" aria-label="Order">
+          {([
+            ['front', 'Bring to front'],
+            ['forward', 'Bring forward'],
+            ['backward', 'Send backward'],
+            ['back', 'Send to back'],
+          ] as const).map(([direction, label]) => (
+            <button key={direction} className="org" title={label} aria-label={label} onClick={() => editor.arrange(direction)}>
+              <OrgIcon name={direction} />
+            </button>
+          ))}
+        </div>
       </Section>
       <Section title="Transform" testId="section-transform" defaultOpen={false}>
         <TransformPanel />

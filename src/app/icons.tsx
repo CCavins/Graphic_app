@@ -1,3 +1,159 @@
+export type OrgIconName =
+  | 'align-left'
+  | 'align-center'
+  | 'align-right'
+  | 'align-top'
+  | 'align-middle'
+  | 'align-bottom'
+  | 'distribute-h'
+  | 'distribute-v'
+  | 'flip-h'
+  | 'flip-v'
+  | 'group'
+  | 'ungroup'
+  | 'front'
+  | 'forward'
+  | 'backward'
+  | 'back'
+
+/** Original icons for the same arrange, group, and align commands Graphic puts in its Alignment pane. */
+export function OrgIcon({ name }: { name: OrgIconName }) {
+  const common = {
+    viewBox: '0 0 24 24',
+    width: 18,
+    height: 18,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.6,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  }
+  const front = { fill: 'currentColor', stroke: 'currentColor' }
+  const back = { fill: 'currentColor', stroke: 'currentColor', opacity: 0.35 }
+  switch (name) {
+    case 'align-left':
+      return (
+        <svg {...common}>
+          <path d="M5 4v16" />
+          <rect x="7" y="6" width="7" height="4.5" />
+          <rect x="7" y="13" width="12" height="4.5" />
+        </svg>
+      )
+    case 'align-center':
+      return (
+        <svg {...common}>
+          <path d="M12 4v16" />
+          <rect x="8.5" y="6" width="7" height="4.5" />
+          <rect x="6" y="13" width="12" height="4.5" />
+        </svg>
+      )
+    case 'align-right':
+      return (
+        <svg {...common}>
+          <path d="M19 4v16" />
+          <rect x="10" y="6" width="7" height="4.5" />
+          <rect x="5" y="13" width="12" height="4.5" />
+        </svg>
+      )
+    case 'align-top':
+      return (
+        <svg {...common}>
+          <path d="M4 5h16" />
+          <rect x="5" y="7" width="4.5" height="7" />
+          <rect x="12" y="7" width="6" height="12" />
+        </svg>
+      )
+    case 'align-middle':
+      return (
+        <svg {...common}>
+          <path d="M4 12h16" />
+          <rect x="5" y="8.5" width="4.5" height="7" />
+          <rect x="12" y="6" width="6" height="12" />
+        </svg>
+      )
+    case 'align-bottom':
+      return (
+        <svg {...common}>
+          <path d="M4 19h16" />
+          <rect x="5" y="10" width="4.5" height="7" />
+          <rect x="12" y="5" width="6" height="12" />
+        </svg>
+      )
+    case 'distribute-h':
+      return (
+        <svg {...common}>
+          <rect x="4" y="7" width="3.2" height="10" />
+          <rect x="10.4" y="5" width="3.2" height="14" />
+          <rect x="16.8" y="8" width="3.2" height="8" />
+        </svg>
+      )
+    case 'distribute-v':
+      return (
+        <svg {...common}>
+          <rect x="7" y="4" width="10" height="3.2" />
+          <rect x="5" y="10.4" width="14" height="3.2" />
+          <rect x="8" y="16.8" width="8" height="3.2" />
+        </svg>
+      )
+    case 'flip-h':
+      return (
+        <svg {...common}>
+          <path d="M5 8.5 9.5 12 5 15.5Z" fill="currentColor" />
+          <path d="M19 8.5 14.5 12 19 15.5Z" fill="currentColor" />
+        </svg>
+      )
+    case 'flip-v':
+      return (
+        <svg {...common}>
+          <path d="M8.5 5 12 9.5 15.5 5Z" fill="currentColor" />
+          <path d="M8.5 19 12 14.5 15.5 19Z" fill="currentColor" />
+        </svg>
+      )
+    case 'group':
+      return (
+        <svg {...common}>
+          <rect x="4" y="4" width="9" height="9" />
+          <rect x="11" y="11" width="9" height="9" />
+        </svg>
+      )
+    case 'ungroup':
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="8" height="8" />
+          <rect x="13" y="13" width="8" height="8" />
+        </svg>
+      )
+    case 'front':
+      return (
+        <svg {...common}>
+          <rect x="8" y="8" width="11" height="11" {...back} />
+          <rect x="4" y="4" width="11" height="11" {...front} />
+        </svg>
+      )
+    case 'forward':
+      return (
+        <svg {...common}>
+          <rect x="9" y="8" width="10" height="10" {...back} />
+          <rect x="5" y="5" width="10" height="10" {...front} />
+        </svg>
+      )
+    case 'backward':
+      return (
+        <svg {...common}>
+          <rect x="5" y="5" width="10" height="10" {...back} />
+          <rect x="9" y="8" width="10" height="10" {...front} />
+        </svg>
+      )
+    case 'back':
+      return (
+        <svg {...common}>
+          <rect x="4" y="4" width="11" height="11" {...back} />
+          <rect x="8" y="8" width="11" height="11" {...front} />
+        </svg>
+      )
+  }
+}
+
 export function ToolIcon({ name }: { name: string }) {
   const common = {
     viewBox: '0 0 24 24',

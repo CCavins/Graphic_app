@@ -207,6 +207,10 @@ export interface SceneNode {
   opacity: number
   blendMode: BlendMode
   commands: Cmd[]
+  /** Closed regions drawn with the fill, for library symbols that are shaded rather than pure line art. */
+  shade?: Cmd[]
+  /** Solid details drawn in the stroke color, such as a drain or a filled icon mark. */
+  ink?: Cmd[]
   children: SceneNode[]
   clip: boolean
   appearance: AppearanceItem[]

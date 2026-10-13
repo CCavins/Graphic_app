@@ -2,7 +2,9 @@ import { expect, it } from 'vitest'
 import { CATALOG, LIBRARIES, loadCatalog, searchCatalog } from './catalog/catalog'
 import { Editor } from './editor/editor'
 import { exportSvg, importPsd, looksLikePsd } from './model/export'
-import { commandsBounds, localBounds, paperBounds } from './model/geometry'
+import { cmd, commandsBounds, localBounds, paperBounds } from './model/geometry'
+import { splitShade } from './model/shading'
+import { separateContours } from './model/transform'
 import { makeRect } from './model/factory'
 import {
   paperPointsToWorldInches,
@@ -346,6 +348,12 @@ export const cases: Record<string, () => void> = {
     expect(nonRect.length / imported.length).toBeGreaterThan(0.9)
     const sources = new Set(imported.map((item) => item.source))
     expect(sources.has('drawio') && sources.has('floorplansvg')).toBe(true)
+    const shaded = imported.filter((item) => item.fillCommands.length || item.inkCommands.length)
+    expect(shaded.length).toBeGreaterThan(400)
+    const tub = CATALOG.find((item) => item.id === 'floor-plan-bathtub')!
+    expect(tub.fillCommands.length).toBeGreaterThan(0)
+    expect(tub.inkCommands.length).toBeGreaterThan(0)
+    expect(door.fillCommands).toHaveLength(0)
   },
   'place-symbol'() {
     const app = editor()
@@ -354,9 +362,23 @@ export const cases: Record<string, () => void> = {
     const node = app.doc.layers[0].children.find((entry) => entry.id === id)!
     expect(paperBounds(node).w).toBeCloseTo((item.worldWidth * 72) / (app.doc.canvas.realInchesPerPoint * 72), 0)
     expect(node.symbolId).toBe(item.id)
-    // Imported symbols come in as line art.
+    // The MIT floor-plan set is line art. draw.io furniture keeps its shading.
     expect(app.fillOf(node)?.enabled).toBe(false)
+    expect(node.ink?.length ?? 0).toBeGreaterThan(0)
+    expect(app.strokeOf(node)!.width).toBeGreaterThan(1)
     expect(app.hit({ x: paperBounds(node).w / 2, y: paperBounds(node).h / 2 }, pointer(0, 0))?.id).toBe(id)
+    const tv = app.placeSymbol('floor-plan-svg-tv', 800, 0)
+    const tvNode = app.doc.layers[0].children.find((entry) => entry.id === tv)!
+    expect(app.fillOf(tvNode)?.enabled).toBe(true)
+    expect(tvNode.shade?.length).toBeGreaterThan(0)
+    const crt = CATALOG.find((entry) => entry.id === 'floor-plan-crt-tv')!
+    expect(splitShade(crt.fillCommands).inset.length).toBeGreaterThan(0)
+    const tub = app.placeSymbol('floor-plan-bathtub', 400, 0)
+    const tubNode = app.doc.layers[0].children.find((entry) => entry.id === tub)!
+    expect(app.fillOf(tubNode)?.enabled).toBe(true)
+    expect(tubNode.shade?.length).toBeGreaterThan(0)
+    expect(tubNode.ink?.length).toBeGreaterThan(0)
+    expect(app.exportSvg()).toContain('fill="rgba(214, 224, 236, 1)"')
     // Numbers badges carry their number as a centered text label.
     const badge = app.placeSymbol('numbers-circle-7', 100, 100)
     const badgeNode = app.doc.layers[0].children.find((entry) => entry.id === badge)!
@@ -497,7 +519,10 @@ export const cases: Record<string, () => void> = {
     app.doc.layers[0].children.push(...nodes)
     app.selection = nodes.map((node) => node.id)
     app.group()
-    expect(app.doc.layers[0].children.some((node) => node.kind === 'group')).toBe(true)
+    expect(app.one()?.kind).toBe('group')
+    app.ungroup()
+    expect(app.selection).toHaveLength(2)
+    expect(app.doc.layers[0].children.every((node) => node.kind === 'path')).toBe(true)
   },
   'pen'() {
     const app = editor()
@@ -1089,21 +1114,63 @@ Object.assign(cases, {
     const app = editor()
     const node = makeRect(0, 0, 100, 100)
     app.doc.layers[0].children.push(node)
-    const before = commandsBounds(node.commands)
     app.setTool('eraser')
     app.eraserWidth = 20
     app.pointerDown(pointer(50, -20))
     app.pointerMove(pointer(50, 120))
     app.pointerUp(pointer(50, 120))
     const after = app.doc.layers[0].children
-    expect(after).toHaveLength(1)
-    // The corridor splits the square into two pieces that keep the original box.
-    expect(after[0].commands.filter((command) => command.c === 'M')).toHaveLength(2)
-    expect(commandsBounds(after[0].commands)).toMatchObject({ w: before.w, h: before.h })
+    // A cut through the middle leaves two objects, not one path with two outlines.
+    expect(after).toHaveLength(2)
+    expect(after.every((item) => item.kind === 'path')).toBe(true)
     expect(app.hit({ x: 50, y: 50 }, pointer(50, 50))).toBeFalsy()
-    expect(app.hit({ x: 20, y: 50 }, pointer(20, 50))?.id).toBe(after[0].id)
+    expect(after.map((item) => item.id)).toContain(app.hit({ x: 20, y: 50 }, pointer(20, 50))?.id)
     app.undo()
     expect(app.doc.layers[0].children[0].commands.filter((command) => command.c === 'M')).toHaveLength(1)
+    // A piece whose box sits inside another box is still separate when it is not inside that outline.
+    const elbow = [
+      cmd('M', 0, 0), cmd('L', 100, 0), cmd('L', 100, 40), cmd('L', 40, 40), cmd('L', 40, 100), cmd('L', 0, 100), cmd('Z'),
+      cmd('M', 50, 50), cmd('L', 90, 50), cmd('L', 90, 90), cmd('L', 50, 90), cmd('Z'),
+    ]
+    expect(separateContours(elbow)).toHaveLength(2)
+    const hole = [
+      cmd('M', 0, 0), cmd('L', 100, 0), cmd('L', 100, 100), cmd('L', 0, 100), cmd('Z'),
+      cmd('M', 25, 25), cmd('L', 75, 25), cmd('L', 75, 75), cmd('L', 25, 75), cmd('Z'),
+    ]
+    expect(separateContours(hole)).toHaveLength(1)
+    // An open line can be shortened, or split, instead of being ignored.
+    const line = editor()
+    line.setTool('line')
+    line.pointerDown(pointer(0, 40))
+    line.pointerMove(pointer(200, 40))
+    line.pointerUp(pointer(200, 40))
+    line.setTool('eraser')
+    line.eraserWidth = 16
+    line.pointerDown(pointer(100, 10))
+    line.pointerMove(pointer(100, 70))
+    line.pointerUp(pointer(100, 70))
+    const parts = line.doc.layers[0].children
+    expect(parts).toHaveLength(2)
+    expect(parts.every((item) => item.kind === 'path')).toBe(true)
+    const span = (node: (typeof parts)[number]) => {
+      const xs = node.commands.filter((command) => command.c !== 'Z').map((command) => command.x)
+      return { min: Math.min(...xs), max: Math.max(...xs) }
+    }
+    const ranges = parts.map(span).sort((a, b) => a.min - b.min)
+    expect(ranges[0].min).toBeLessThan(2)
+    expect(ranges[0].max).toBeLessThan(100)
+    expect(ranges[1].min).toBeGreaterThan(100)
+    expect(ranges[1].max).toBeGreaterThan(198)
+    line.undo()
+    line.setTool('eraser')
+    line.pointerDown(pointer(190, 10))
+    line.pointerMove(pointer(190, 70))
+    line.pointerUp(pointer(190, 70))
+    expect(line.doc.layers[0].children).toHaveLength(1)
+    const shortened = span(line.doc.layers[0].children[0])
+    expect(shortened.min).toBeLessThan(2)
+    expect(shortened.max).toBeLessThan(190)
+    expect(shortened.max).toBeGreaterThan(160)
   },
   'scissors-add-anchor'() {
     const app = editor()

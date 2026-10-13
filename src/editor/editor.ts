@@ -71,14 +71,18 @@ import {
   paperCommands,
   rotateNode,
   scaleLocal,
+  separateContours,
   splitPath,
+  symbolStrokeWidth,
   transformNodes,
+  trimOpenPath,
 } from '../model/transform'
 import type {
   AppearanceItem,
   BaseUnit,
   Brush,
   CanvasSettings,
+  Cmd,
   Color,
   Doc,
   EffectAttr,
@@ -180,6 +184,8 @@ interface DragOrigin {
   y: number
   rotation: number
   commands: SceneNode['commands']
+  shade?: SceneNode['shade']
+  ink?: SceneNode['ink']
   /** Groups keep a copy of their children so a resize can be recomputed from the press each move. */
   children?: SceneNode[]
   dimension?: SceneNode['dimension']
@@ -481,6 +487,10 @@ export class Editor {
     this.context = null
     const ruler = this.inRuler(pointer)
     if (pointer.button === 2) {
+      if (!ruler) {
+        const hit = this.hit(this.toPaper(pointer), pointer)
+        if (hit && !this.selection.includes(hit.id)) this.selection = [hit.id]
+      }
       this.context = ruler ? { x: pointer.cx, y: pointer.cy, kind: 'ruler', axis: ruler } : { x: pointer.cx, y: pointer.cy, kind: 'canvas' }
       this.emit()
       return
@@ -903,6 +913,8 @@ export class Editor {
       node.y = origin.y
       node.rotation = origin.rotation
       node.commands = structuredClone(origin.commands)
+      node.shade = origin.shade ? structuredClone(origin.shade) : undefined
+      node.ink = origin.ink ? structuredClone(origin.ink) : undefined
     })
     const past = this.past[this.active]
     past.push(current)
@@ -928,6 +940,8 @@ export class Editor {
           y: node.y,
           rotation: node.rotation,
           commands: structuredClone(node.commands),
+          shade: node.shade ? structuredClone(node.shade) : undefined,
+          ink: node.ink ? structuredClone(node.ink) : undefined,
           children: node.kind === 'group' ? structuredClone(node.children) : undefined,
           dimension: node.dimension ? { ...node.dimension } : undefined,
           text: node.text ? { ...node.text } : undefined,
@@ -942,6 +956,8 @@ export class Editor {
     node.y = origin.y
     node.rotation = origin.rotation
     node.commands = structuredClone(origin.commands)
+    node.shade = origin.shade ? structuredClone(origin.shade) : undefined
+    node.ink = origin.ink ? structuredClone(origin.ink) : undefined
     if (origin.children) node.children = structuredClone(origin.children)
     if (origin.dimension) node.dimension = { ...origin.dimension }
     if (origin.text && node.text) Object.assign(node.text, { fontSize: origin.text.fontSize, fieldWidth: origin.text.fieldWidth })
@@ -1724,6 +1740,7 @@ export class Editor {
     group.children = nodes.map((node) => structuredClone(node))
     for (const node of nodes) removeNode(this.doc, node.id)
     this.addNode(group)
+    this.selection = [group.id]
     this.emit()
   }
 
@@ -2004,45 +2021,114 @@ export class Editor {
     this.emit()
   }
 
-  /** Subtract an eraser corridor from closed paths it crosses. */
+  /** Cut closed shapes with the eraser, and shorten or split open lines it crosses. */
   eraseAlong(points: Pt[]): void {
-    const cut = corridor(points, this.eraserWidth / Math.max(0.25, this.view.zoom) * this.view.zoom)
+    const radius = Math.max(0.5, this.eraserWidth / 2)
+    const cut = corridor(points, radius * 2)
     const cutBounds = commandsBounds(cut)
     const targets: SceneNode[] = []
     const layer = activeLayer(this.doc)
     for (const node of layer.children) {
       if (!node.visible || node.locked || node.kind !== 'path') continue
-      if (!node.commands.some((c) => c.c === 'Z')) continue
       const box = paperBounds(node)
-      const overlaps = box.x < cutBounds.x + cutBounds.w && box.x + box.w > cutBounds.x && box.y < cutBounds.y + cutBounds.h && box.y + box.h > cutBounds.y
+      const pad = radius + (this.strokeOf(node)?.width ?? 0) / 2
+      const overlaps =
+        box.x - pad < cutBounds.x + cutBounds.w &&
+        box.x + box.w + pad > cutBounds.x &&
+        box.y - pad < cutBounds.y + cutBounds.h &&
+        box.y + box.h + pad > cutBounds.y
       if (overlaps) targets.push(node)
     }
     if (!targets.length) return
     this.snapshot()
     for (const node of targets) {
-      try {
-        const results = booleanCommands('subtract', paperCommands(node), cut)
-        const commands = results[0] ?? []
-        if (!commands.length) {
-          removeNode(this.doc, node.id)
-          this.selection = this.selection.filter((id) => id !== node.id)
-          continue
-        }
-        node.commands = commands
+      const open = !node.commands.some((command) => command.c === 'Z')
+      if (open) {
+        const reach = radius + (this.strokeOf(node)?.width ?? 0) / 2
+        const pieces = trimOpenPath(paperCommands(node), points, reach)
+        if (!pieces) continue
+        node.shade = undefined
+        node.ink = undefined
         node.x = 0
         node.y = 0
         node.rotation = 0
+        this.replaceWithPieces(node, pieces, layer)
+        continue
+      }
+      try {
+        const results = booleanCommands('subtract', paperCommands(node), cut)
+        this.replaceWithPieces(node, separateContours(results[0] ?? []), layer)
       } catch {
         /* a degenerate path stays as it is */
       }
     }
   }
 
+  /** Turn a saved path into one object per piece when those pieces do not actually overlap. */
+  private detachDisjoint(doc: Doc): void {
+    const visit = (list: SceneNode[]) => {
+      for (let index = 0; index < list.length; index++) {
+        const node = list[index]
+        if (node.children.length) visit(node.children)
+        if (node.kind !== 'path') continue
+        const pieces = separateContours(node.commands)
+        if (pieces.length < 2) continue
+        const children = pieces.map((commands, piece) => {
+          const next = newPathFromCommands(node, commands, `${node.name} ${piece + 1}`)
+          next.x = node.x
+          next.y = node.y
+          next.rotation = node.rotation
+          next.shade = undefined
+          next.ink = undefined
+          return next
+        })
+        list.splice(index, 1, ...children)
+        index += children.length - 1
+      }
+    }
+    for (const layer of doc.layers) visit(layer.children)
+  }
+
+  /** One contour stays on the node. Disconnected contours become separate objects. */
+  private replaceWithPieces(node: SceneNode, pieces: Cmd[][], layer: { children: SceneNode[] }): void {
+    node.shade = undefined
+    node.ink = undefined
+    if (pieces.length <= 1) {
+      if (!pieces.length) {
+        removeNode(this.doc, node.id)
+        this.selection = this.selection.filter((id) => id !== node.id)
+        return
+      }
+      node.commands = pieces[0]
+      node.x = 0
+      node.y = 0
+      node.rotation = 0
+      return
+    }
+    const children = pieces.map((commands, index) => {
+      const piece = newPathFromCommands(node, commands, `${node.name} ${index + 1}`)
+      piece.x = 0
+      piece.y = 0
+      piece.rotation = 0
+      piece.shade = undefined
+      piece.ink = undefined
+      return piece
+    })
+    const list = parentList(this.doc, node.id) ?? layer.children
+    const index = list.findIndex((item) => item.id === node.id)
+    if (index >= 0) list.splice(index, 1, ...children)
+    else list.push(...children)
+    this.selection = children.map((piece) => piece.id)
+  }
+
   slant(amount: number): void {
     const node = this.one()
     if (!node) return
     this.snapshot()
-    node.commands = node.commands.map((command) => ({ ...command, x: command.x + command.y * amount, x1: command.x1 + command.y1 * amount, x2: command.x2 + command.y2 * amount }))
+    const shear = (commands: SceneNode['commands']) => commands.map((command) => ({ ...command, x: command.x + command.y * amount, x1: command.x1 + command.y1 * amount, x2: command.x2 + command.y2 * amount }))
+    node.commands = shear(node.commands)
+    if (node.shade) node.shade = shear(node.shade)
+    if (node.ink) node.ink = shear(node.ink)
     this.emit()
   }
 
@@ -2050,7 +2136,11 @@ export class Editor {
     const nodes = selectedNodes(this.doc, this.selection)
     if (!nodes.length) return
     this.snapshot()
-    for (const node of nodes) node.commands = scaleCommands(node.commands, factor, factor)
+    for (const node of nodes) {
+      node.commands = scaleCommands(node.commands, factor, factor)
+      if (node.shade) node.shade = scaleCommands(node.shade, factor, factor)
+      if (node.ink) node.ink = scaleCommands(node.ink, factor, factor)
+    }
     this.emit()
   }
 
@@ -2600,21 +2690,28 @@ export class Editor {
     })
   }
 
-  placeSymbol(id: string, x = 48, y = 48): string {
+  placeSymbol(id: string, x = 48, y = 48, center = false): string {
     const item = [...CATALOG, ...this.customLibrary].find((entry) => entry.id === id)
     if (!item) throw new Error('Symbol not found')
     this.snapshot()
     const width = worldInchesToPaperPoints(item.worldWidth, this.doc.canvas.realInchesPerPoint)
     const height = worldInchesToPaperPoints(item.worldHeight, this.doc.canvas.realInchesPerPoint)
-    const node = makePath(item.name, x, y, scaleCommands(item.commands, width / item.worldWidth, height / item.worldHeight))
+    const sx = width / item.worldWidth
+    const sy = height / item.worldHeight
+    const node = makePath(item.name, center ? x - width / 2 : x, center ? y - height / 2 : y, scaleCommands(item.commands, sx, sy))
     node.symbolId = item.id
+    if (item.fillCommands?.length) node.shade = scaleCommands(item.fillCommands, sx, sy)
+    if (item.inkCommands?.length) node.ink = scaleCommands(item.inkCommands, sx, sy)
     const fill = this.fillOf(node)
     const stroke = this.strokeOf(node)
-    if (fill) fill.enabled = item.source === 'generated' || item.source === 'custom'
-    if (fill && fill.enabled) fill.color = rgb(255, 255, 255, 1)
+    const shaded = Boolean(node.shade?.length)
+    if (fill) fill.enabled = shaded || item.source === 'generated' || item.source === 'custom'
+    if (fill && fill.enabled) fill.color = shaded ? rgb(214, 224, 236, 1) : rgb(255, 255, 255, 1)
     if (stroke) {
       stroke.color = structuredClone(this.paint.stroke)
-      stroke.width = 1
+      // Match the library thumbnail: a stroke that stays visible on a symbol several feet wide.
+      const span = Math.max(width, height)
+      stroke.width = item.source === 'generated' ? 1 : symbolStrokeWidth(span)
     }
     if (item.text) node.labels = [{ ...makeLabel('text', this.doc.canvas, item.text), location: 'center', offset: 0 }]
     this.addNode(node)
@@ -2665,6 +2762,8 @@ export class Editor {
         worldWidth: Math.max(0.1, inchesW),
         worldHeight: Math.max(0.1, inchesH),
         commands: scaleCommands(translateCommands(node.commands, -bounds.x, -bounds.y), inchesW / (bounds.w || 1), inchesH / (bounds.h || 1)),
+        fillCommands: node.shade?.length ? scaleCommands(translateCommands(node.shade, -bounds.x, -bounds.y), inchesW / (bounds.w || 1), inchesH / (bounds.h || 1)) : [],
+        inkCommands: node.ink?.length ? scaleCommands(translateCommands(node.ink, -bounds.x, -bounds.y), inchesW / (bounds.w || 1), inchesH / (bounds.h || 1)) : [],
         source: 'custom',
       })
       this.emit()
@@ -2762,6 +2861,7 @@ export class Editor {
         throw new Error('File is not a Measured document')
       }
       migrate(parsed.document)
+      this.detachDisjoint(parsed.document)
       this.snapshot()
       this.docs[this.active] = parsed.document
       this.selection = []

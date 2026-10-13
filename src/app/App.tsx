@@ -6,7 +6,7 @@ import { textFrame } from '../model/geometry'
 import type { BaseUnit } from '../model/types'
 import { loadAutosave, saveAutosave, saveWithPicker } from '../storage/files'
 import { ExportDialog, HelpDialog, NewDocumentDialog, PluginsDialog, RecolorDialog, SelectSimilarDialog } from './dialogs'
-import { ToolIcon } from './icons'
+import { OrgIcon, ToolIcon } from './icons'
 import { editor } from './instance'
 import { OptionsBar, TOOL_NAMES } from './OptionsBar'
 import { AppearancePanel } from './panels/Appearance'
@@ -254,7 +254,24 @@ export function App() {
         </div>
       </aside>
       <div className="stage" ref={stageRef}>
-        <canvas ref={canvasRef} data-testid="canvas" />
+        <canvas
+          ref={canvasRef}
+          data-testid="canvas"
+          onDragOver={(event) => {
+            const types = [...event.dataTransfer.types]
+            if (types.includes('Files') || (!types.includes('application/x-measured-symbol') && !types.includes('text/plain'))) return
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'copy'
+          }}
+          onDrop={(event) => {
+            const id = event.dataTransfer.getData('application/x-measured-symbol') || event.dataTransfer.getData('text/plain').replace(/^symbol:/, '')
+            if (!id || id.includes('\n')) return
+            event.preventDefault()
+            const bounds = event.currentTarget.getBoundingClientRect()
+            const paper = editor.toPaper({ cx: event.clientX - bounds.left, cy: event.clientY - bounds.top })
+            editor.placeSymbol(id, paper.x, paper.y, true)
+          }}
+        />
         {editing?.text && editingFrame && editingOrigin && (
           <textarea
             ref={textRef}
@@ -375,9 +392,12 @@ function ContextMenu({ stage }: { stage: HTMLDivElement | null }) {
       <button disabled={!editor.clipboardNodes} onClick={run(() => editor.pasteInPlace())}>Paste in place</button>
       <button disabled={!has} data-testid="menu-duplicate" onClick={run(() => editor.duplicate())}>Duplicate</button>
       <hr />
-      <button disabled={!has} onClick={run(() => editor.group())}>Group</button>
-      <button disabled={!has} onClick={run(() => editor.arrange('front'))}>Bring to front</button>
-      <button disabled={!has} onClick={run(() => editor.arrange('back'))}>Send to back</button>
+      <button className="menu-item" disabled={editor.selection.length < 2} onClick={run(() => editor.group())}><OrgIcon name="group" /> Group</button>
+      <button className="menu-item" disabled={editor.one()?.kind !== 'group'} onClick={run(() => editor.ungroup())}><OrgIcon name="ungroup" /> Ungroup</button>
+      <button className="menu-item" disabled={!has} onClick={run(() => editor.arrange('front'))}><OrgIcon name="front" /> Bring to front</button>
+      <button className="menu-item" disabled={!has} onClick={run(() => editor.arrange('forward'))}><OrgIcon name="forward" /> Bring forward</button>
+      <button className="menu-item" disabled={!has} onClick={run(() => editor.arrange('backward'))}><OrgIcon name="backward" /> Send backward</button>
+      <button className="menu-item" disabled={!has} onClick={run(() => editor.arrange('back'))}><OrgIcon name="back" /> Send to back</button>
       <button disabled={!has} onClick={run(() => editor.selection.forEach((id) => editor.toggleLock(id)))}>Lock / unlock</button>
       <hr />
       <button disabled={!has} onClick={run(() => editor.addLabel('size'))}>Add size label</button>

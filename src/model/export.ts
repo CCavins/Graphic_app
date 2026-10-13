@@ -1,6 +1,7 @@
 import { PDFDocument, rgb as pdfRgb } from 'pdf-lib'
-import { cssColor, toRgb } from './color'
+import { cssColor, darken, toRgb } from './color'
 import { commandsBounds, paperBounds, pivotOf } from './geometry'
+import { splitShade } from './shading'
 import type { Doc, SceneNode } from './types'
 import { eachNode } from './factory'
 import { labelAnchor, labelText, placedLabels } from './labels'
@@ -32,15 +33,19 @@ function svgRotate(node: SceneNode): string {
   return ` rotate(${(node.rotation * 180) / Math.PI} ${pivot.x} ${pivot.y})`
 }
 
-function pathD(node: SceneNode): string {
+function pathFrom(commands: SceneNode['commands']): string {
   const parts: string[] = []
-  for (const c of node.commands) {
+  for (const c of commands) {
     if (c.c === 'M') parts.push(`M ${c.x} ${c.y}`)
     else if (c.c === 'L') parts.push(`L ${c.x} ${c.y}`)
     else if (c.c === 'C') parts.push(`C ${c.x1} ${c.y1} ${c.x2} ${c.y2} ${c.x} ${c.y}`)
     else parts.push('Z')
   }
   return parts.join(' ')
+}
+
+function pathD(node: SceneNode): string {
+  return pathFrom(node.commands)
 }
 
 export function exportSvg(doc: Doc, options: ExportOptions): string {
@@ -97,7 +102,17 @@ export function exportSvg(doc: Doc, options: ExportOptions): string {
         const color = cssColor(node.text.color ?? { space: 'rgb', r: 28, g: 36, b: 48, a: 1 })
         return `<g transform="translate(${node.x} ${node.y})${svgRotate(node)}"><text x="0" y="${node.text.fontSize}" font-size="${node.text.fontSize}" font-family="${escape(node.text.fontFamily)}" font-style="${node.text.fontStyle.includes('italic') ? 'italic' : 'normal'}" font-weight="${node.text.fontStyle.includes('bold') ? 'bold' : 'normal'}" fill="${color}">${escape(node.text.content)}</text>${labels}</g>`
       }
-      return `<g transform="translate(${node.x} ${node.y})${svgRotate(node)}" opacity="${node.opacity}"><path d="${pathD(node)}" fill="${fillCss}" stroke="${strokeCss}" stroke-width="${sw}"${dash}/>${labels}</g>`
+      const shade =
+        node.shade?.length && fillCss !== 'none'
+          ? (() => {
+              const { body, inset } = splitShade(node.shade!)
+              const insetCss = fill && fill.kind === 'fill' ? cssColor(darken(fill.color, 0.28)) : fillCss
+              return `${body.length ? `<path d="${pathFrom(body)}" fill="${fillCss}" stroke="none"/>` : ''}${inset.length ? `<path d="${pathFrom(inset)}" fill="${insetCss}" stroke="none"/>` : ''}`
+            })()
+          : ''
+      const ink = node.ink?.length ? `<path d="${pathFrom(node.ink)}" fill="${strokeCss === 'none' ? '#142030' : strokeCss}" stroke="none"/>` : ''
+      const bodyFill = node.shade?.length ? 'none' : fillCss
+      return `<g transform="translate(${node.x} ${node.y})${svgRotate(node)}" opacity="${node.opacity}">${shade}${ink}<path d="${pathD(node)}" fill="${bodyFill}" stroke="${strokeCss}" stroke-width="${sw}"${dash}/>${labels}</g>`
     })
     .join('')
   const background =

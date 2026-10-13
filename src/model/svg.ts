@@ -134,6 +134,19 @@ export class PathBuilder {
     this.close()
   }
 
+  append(other: PathBuilder): void {
+    for (const command of other.commands) {
+      this.commands.push({ ...command })
+      if (command.c !== 'Z') {
+        this.see(command.x, command.y)
+        if (command.c === 'C') {
+          this.see(command.x1, command.y1)
+          this.see(command.x2, command.y2)
+        }
+      }
+    }
+  }
+
   /** Compact string form used by symbols.json. */
   toString(): string {
     return this.commands
@@ -409,16 +422,31 @@ export interface SvgImport {
   commands: Cmd[]
   width: number
   height: number
+  /** Closed regions that should be lightly shaded. */
+  shade: Cmd[]
+  /** Closed regions painted solid, such as a door jamb. */
+  ink: Cmd[]
 }
 
 /**
  * Flatten an SVG document into one path in user units with its top-left at 0,0.
  * Handles path, rect, circle, ellipse, line, polyline, polygon, and nested transforms.
  */
+function svgFillTone(tag: XmlTag): 'none' | 'ink' | 'shade' {
+  const style = tag.attrs.style ?? ''
+  const value = (tag.attrs.fill ?? style.match(/fill:\s*([^;]+)/)?.[1] ?? '').trim().toLowerCase()
+  if (!value || value === 'none' || value === 'transparent') return 'none'
+  if (value === '#000' || value === '#000000' || value === 'black') return 'ink'
+  return 'shade'
+}
+
 export function svgToCommands(svg: string): SvgImport {
   const stack: Matrix[] = [IDENTITY]
   const hidden: boolean[] = [false]
   const p = new PathBuilder()
+  const shade = new PathBuilder()
+  const ink = new PathBuilder()
+  const plain: PathBuilder[] = []
   let skip = 0
   for (const tag of xmlTags(svg)) {
     if (tag.name === 'defs' || tag.name === 'style' || tag.name === 'metadata' || tag.name === 'clipPath' || tag.name === 'mask') {
@@ -448,41 +476,56 @@ export function svgToCommands(svg: string): SvgImport {
     if (isHidden) continue
     const num = (key: string) => Number(tag.attrs[key]) || 0
     const local = new PathBuilder()
-    if (tag.name === 'path' && tag.attrs.d) appendSvgPath(tag.attrs.d, m, p)
-    else if (tag.name === 'rect') {
-      local.rect(num('x'), num('y'), num('width'), num('height'), Math.max(num('rx'), num('ry')))
-      appendSvgPath(local.toString(), m, p)
-    } else if (tag.name === 'circle') {
-      local.ellipse(num('cx') - num('r'), num('cy') - num('r'), num('r') * 2, num('r') * 2)
-      appendSvgPath(local.toString(), m, p)
-    } else if (tag.name === 'ellipse') {
-      local.ellipse(num('cx') - num('rx'), num('cy') - num('ry'), num('rx') * 2, num('ry') * 2)
-      appendSvgPath(local.toString(), m, p)
-    } else if (tag.name === 'line') {
-      appendSvgPath(`M${num('x1')} ${num('y1')} L${num('x2')} ${num('y2')}`, m, p)
-    } else if (tag.name === 'polyline' || tag.name === 'polygon') {
+    if (tag.name === 'path' && tag.attrs.d) appendSvgPath(tag.attrs.d, m, local)
+    else if (tag.name === 'rect') local.rect(num('x'), num('y'), num('width'), num('height'), Math.max(num('rx'), num('ry')))
+    else if (tag.name === 'circle') local.ellipse(num('cx') - num('r'), num('cy') - num('r'), num('r') * 2, num('r') * 2)
+    else if (tag.name === 'ellipse') local.ellipse(num('cx') - num('rx'), num('cy') - num('ry'), num('rx') * 2, num('ry') * 2)
+    else if (tag.name === 'line') appendSvgPath(`M${num('x1')} ${num('y1')} L${num('x2')} ${num('y2')}`, m, local)
+    else if (tag.name === 'polyline' || tag.name === 'polygon') {
       const pts = (tag.attrs.points ?? '').split(/[\s,]+/).filter(Boolean).map(Number)
       if (pts.length >= 4) {
         let d = `M${pts[0]} ${pts[1]}`
         for (let k = 2; k + 1 < pts.length; k += 2) d += ` L${pts[k]} ${pts[k + 1]}`
         if (tag.name === 'polygon') d += ' Z'
-        appendSvgPath(d, m, p)
+        appendSvgPath(d, m, local)
       }
-    }
+    } else continue
+    if (!local.commands.length) continue
+    // rect/circle/ellipse were built in local units; path and line already applied the transform.
+    const piece = tag.name === 'path' || tag.name === 'line' || tag.name === 'polyline' || tag.name === 'polygon' ? local : new PathBuilder()
+    if (piece !== local) appendSvgPath(local.toString(), m, piece)
+    p.append(piece)
+    const tone = svgFillTone(tag)
+    if (tone === 'ink') ink.append(piece)
+    else if (tone === 'shade') shade.append(piece)
+    else if (piece.commands.some((command) => command.c === 'Z')) plain.push(piece)
   }
-  if (!p.commands.length || !Number.isFinite(p.minX)) return { commands: [], width: 0, height: 0 }
-  const commands = p.commands.map((c) =>
-    c.c === 'Z'
-      ? c
-      : {
-          ...c,
-          x: c.x - p.minX,
-          y: c.y - p.minY,
-          x1: c.c === 'C' ? c.x1 - p.minX : 0,
-          y1: c.c === 'C' ? c.y1 - p.minY : 0,
-          x2: c.c === 'C' ? c.x2 - p.minX : 0,
-          y2: c.c === 'C' ? c.y2 - p.minY : 0,
-        },
-  )
-  return { commands, width: p.maxX - p.minX, height: p.maxY - p.minY }
+  if (!p.commands.length || !Number.isFinite(p.minX)) return { commands: [], width: 0, height: 0, shade: [], ink: [] }
+  const area = Math.max(1, (p.maxX - p.minX) * (p.maxY - p.minY))
+  for (const piece of plain) {
+    const boxArea = Math.max(0, piece.maxX - piece.minX) * Math.max(0, piece.maxY - piece.minY)
+    // A closed outline with real area, like the two bars of a plan-view TV, reads as a shaded panel.
+    if (boxArea >= area * 0.12) shade.append(piece)
+  }
+  const shift = (commands: Cmd[]) =>
+    commands.map((c) =>
+      c.c === 'Z'
+        ? c
+        : {
+            ...c,
+            x: c.x - p.minX,
+            y: c.y - p.minY,
+            x1: c.c === 'C' ? c.x1 - p.minX : 0,
+            y1: c.c === 'C' ? c.y1 - p.minY : 0,
+            x2: c.c === 'C' ? c.x2 - p.minX : 0,
+            y2: c.c === 'C' ? c.y2 - p.minY : 0,
+          },
+    )
+  return {
+    commands: shift(p.commands),
+    width: p.maxX - p.minX,
+    height: p.maxY - p.minY,
+    shade: shift(shade.commands),
+    ink: shift(ink.commands),
+  }
 }

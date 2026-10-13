@@ -1,9 +1,14 @@
 import { outlineStroke } from './boolean'
-import { cmd, distToSegment, localToPaper, paperBounds, paperToLocal, pivotOf, sampleCommands, unionBounds } from './geometry'
+import { cmd, commandsBounds, distToSegment, localToPaper, paperBounds, paperToLocal, pivotOf, pointInPolygon, sampleCommands, unionBounds } from './geometry'
 import type { Cmd, Doc, Pt, Rect, SceneNode, TransformOrigin, TransformStep } from './types'
 import { InputError } from './units'
 
 export const IDENTITY_STEP: TransformStep = { dx: 0, dy: 0, rotate: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0, origin: 'c' }
+
+/** Stroke weight that stays a similar fraction of the symbol as the library thumbnail. */
+export function symbolStrokeWidth(span: number): number {
+  return Math.min(36, Math.max(0.75, span / 42))
+}
 
 export function originPoint(box: Rect, origin: TransformOrigin): Pt {
   const fx = origin.includes('w') ? 0 : origin.includes('e') ? 1 : 0.5
@@ -70,7 +75,10 @@ export function transformNodes(nodes: SceneNode[], step: TransformStep, scaleSty
     if (step.shearX !== 0 || step.shearY !== 0) {
       const tx = Math.tan(step.shearX)
       const ty = Math.tan(step.shearY)
-      node.commands = mapCommands(node.commands, (x, y) => ({ x: x + y * tx, y: y + x * ty }))
+      const shear = (commands: SceneNode['commands']) => mapCommands(commands, (x, y) => ({ x: x + y * tx, y: y + x * ty }))
+      node.commands = shear(node.commands)
+      if (node.shade) node.shade = shear(node.shade)
+      if (node.ink) node.ink = shear(node.ink)
       node.x += (node.y - origin.y) * tx
       node.y += (node.x - origin.x) * ty
     }
@@ -83,7 +91,10 @@ export function transformNodes(nodes: SceneNode[], step: TransformStep, scaleSty
 /** Scale a node in its own coordinate space about its local (0, 0); groups scale their children with them. */
 export function scaleLocal(node: SceneNode, sx: number, sy: number, scaleStyles = false): void {
   const max = Math.max(sx, sy)
-  node.commands = mapCommands(node.commands, (x, y) => ({ x: x * sx, y: y * sy }))
+  const scale = (commands: SceneNode['commands']) => mapCommands(commands, (x, y) => ({ x: x * sx, y: y * sy }))
+  node.commands = scale(node.commands)
+  if (node.shade) node.shade = scale(node.shade)
+  if (node.ink) node.ink = scale(node.ink)
   if (node.text) {
     node.text.fontSize *= max
     node.text.fieldWidth *= sx
@@ -101,6 +112,11 @@ export function scaleLocal(node: SceneNode, sx: number, sy: number, scaleStyles 
         attr.dy *= sy
       }
     }
+  }
+  if (node.symbolId) {
+    const box = commandsBounds(node.commands)
+    const stroke = node.appearance.find((attr) => attr.kind === 'stroke')
+    if (stroke && stroke.kind === 'stroke') stroke.width = symbolStrokeWidth(Math.max(box.w, box.h))
   }
   for (const child of node.children) {
     child.x *= sx
@@ -364,4 +380,132 @@ export function corridor(points: Pt[], width: number): Cmd[] {
 
 export function pointsAlong(commands: Cmd[]): Pt[] {
   return sampleCommands(commands, 6)
+}
+
+function subpathsOf(commands: Cmd[]): Cmd[][] {
+  const parts: Cmd[][] = []
+  let current: Cmd[] = []
+  for (const command of commands) {
+    if (command.c === 'M' && current.length) {
+      parts.push(current)
+      current = []
+    }
+    current.push(command)
+  }
+  if (current.length) parts.push(current)
+  return parts
+}
+
+function ringArea(points: Pt[]): number {
+  let area = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) area += points[j].x * points[i].y - points[i].x * points[j].y
+  return Math.abs(area) / 2
+}
+
+function interiorPoint(points: Pt[]): Pt {
+  const center = {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+  }
+  if (pointInPolygon(center, points)) return center
+  return points[Math.floor(points.length / 2)] ?? center
+}
+
+/**
+ * Split a path into separate shapes. A hole stays with the shape around it.
+ * Two contours that do not touch become two shapes, even when one's box sits inside the other's.
+ */
+export function separateContours(commands: Cmd[]): Cmd[][] {
+  const parts = subpathsOf(commands)
+  if (parts.length < 2) return parts.length ? [commands] : []
+  const rings = parts.map((part) => sampleCommands(part, 6))
+  const areas = rings.map(ringArea)
+  const points = rings.map(interiorPoint)
+  const parent = parts.map((_, index) => {
+    let best = -1
+    let bestArea = Infinity
+    rings.forEach((ring, other) => {
+      if (other === index || !(areas[other] > areas[index] * 1.05)) return
+      if (!pointInPolygon(points[index], ring)) return
+      if (areas[other] < bestArea) {
+        best = other
+        bestArea = areas[other]
+      }
+    })
+    return best
+  })
+  const descendants = (index: number): number[] => {
+    const children = parent.flatMap((owner, child) => (owner === index ? [child] : []))
+    return [index, ...children.flatMap(descendants)]
+  }
+  const roots = parent.flatMap((owner, index) => (owner === -1 ? [index] : []))
+  if (roots.length < 2) return [commands]
+  return roots.map((root) => descendants(root).flatMap((index) => parts[index]))
+}
+
+function pathSamples(commands: Cmd[], step: number): Pt[] {
+  const rough = sampleCommands(commands, 8)
+  const out: Pt[] = []
+  for (const point of rough) {
+    const prev = out[out.length - 1]
+    if (!prev) {
+      out.push(point)
+      continue
+    }
+    const length = Math.hypot(point.x - prev.x, point.y - prev.y)
+    const count = Math.max(1, Math.ceil(length / step))
+    for (let i = 1; i <= count; i++) {
+      const t = i / count
+      out.push({ x: prev.x + (point.x - prev.x) * t, y: prev.y + (point.y - prev.y) * t })
+    }
+  }
+  return out
+}
+
+/**
+ * Cut an open path with an eraser stroke. Returns null when the eraser misses,
+ * an empty list when the whole path is removed, or one piece per remaining section.
+ */
+export function trimOpenPath(commands: Cmd[], eraser: Pt[], radius: number): Cmd[][] | null {
+  if (commands.some((command) => command.c === 'Z') || eraser.length === 0 || !(radius > 0)) return null
+  const samples = pathSamples(commands, Math.max(1, radius / 2))
+  if (samples.length < 2) return null
+  const hit = (point: Pt) => {
+    for (let i = 0; i < eraser.length; i++) {
+      if (Math.hypot(point.x - eraser[i].x, point.y - eraser[i].y) <= radius) return true
+      if (i > 0 && distToSegment(point, eraser[i - 1], eraser[i]) <= radius) return true
+    }
+    return false
+  }
+  const edge = (outside: Pt, inside: Pt): Pt => {
+    let near = 0
+    let far = 1
+    for (let i = 0; i < 14; i++) {
+      const t = (near + far) / 2
+      const point = { x: outside.x + (inside.x - outside.x) * t, y: outside.y + (inside.y - outside.y) * t }
+      if (hit(point)) far = t
+      else near = t
+    }
+    return { x: outside.x + (inside.x - outside.x) * near, y: outside.y + (inside.y - outside.y) * near }
+  }
+  if (!samples.some(hit)) return null
+  const pieces: Pt[][] = []
+  let run: Pt[] = []
+  const finish = () => {
+    if (run.length >= 2) pieces.push(run)
+    run = []
+  }
+  samples.forEach((point, index) => {
+    if (!hit(point)) {
+      if (!run.length && index > 0 && hit(samples[index - 1])) run.push(edge(point, samples[index - 1]))
+      run.push(point)
+      return
+    }
+    if (run.length && index > 0 && !hit(samples[index - 1])) run.push(edge(samples[index - 1], point))
+    finish()
+  })
+  finish()
+  return pieces
+    .filter((piece) => Math.hypot(piece[piece.length - 1].x - piece[0].x, piece[piece.length - 1].y - piece[0].y) > radius * 0.25)
+    .map((piece) => piece.map((point, index) => cmd(index === 0 ? 'M' : 'L', point.x, point.y)))
 }

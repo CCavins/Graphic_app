@@ -169,15 +169,19 @@ export function resizeArtwork(doc: Doc, factor: number, scaleEffects: boolean): 
   const scaleNode = (node: SceneNode) => {
     node.x *= factor
     node.y *= factor
-    node.commands = node.commands.map((c) => ({
-      ...c,
-      x: c.x * factor,
-      y: c.y * factor,
-      x1: c.x1 * factor,
-      y1: c.y1 * factor,
-      x2: c.x2 * factor,
-      y2: c.y2 * factor,
-    }))
+    const grow = (commands: SceneNode['commands']) =>
+      commands.map((c) => ({
+        ...c,
+        x: c.x * factor,
+        y: c.y * factor,
+        x1: c.x1 * factor,
+        y1: c.y1 * factor,
+        x2: c.x2 * factor,
+        y2: c.y2 * factor,
+      }))
+    node.commands = grow(node.commands)
+    if (node.shade) node.shade = grow(node.shade)
+    if (node.ink) node.ink = grow(node.ink)
     if (scaleEffects) {
       for (const attr of node.appearance) {
         if (attr.kind === 'stroke') attr.width *= factor

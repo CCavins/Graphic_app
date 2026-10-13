@@ -14,6 +14,10 @@ export interface CatalogItem {
   worldHeight: number
   /** Path in world inches with the top-left corner at 0,0. */
   commands: Cmd[]
+  /** Subset of the path that is shaded. Empty for line-art symbols. */
+  fillCommands: Cmd[]
+  /** Subset painted solid in the stroke color. */
+  inkCommands: Cmd[]
   /** Optional label placed in the middle of the symbol (used by the Numbers library). */
   text?: string
   source?: 'drawio' | 'floorplansvg' | 'generated' | 'custom'
@@ -29,6 +33,8 @@ interface RawSymbol {
   w: number
   h: number
   d: string
+  f?: string
+  k?: string
   src: 'drawio' | 'floorplansvg'
 }
 
@@ -61,6 +67,8 @@ function fromRaw(raw: RawSymbol): CatalogItem {
     worldWidth: Math.max(0.05, raw.w * raw.s),
     worldHeight: Math.max(0.05, raw.h * raw.s),
     commands: [],
+    fillCommands: [],
+    inkCommands: [],
     source: raw.src,
   }
   Object.defineProperty(item, 'commands', {
@@ -68,6 +76,22 @@ function fromRaw(raw: RawSymbol): CatalogItem {
     get() {
       if (!parsed) parsed = parsePathData(raw.d, raw.s)
       return parsed
+    },
+  })
+  let parsedFill: Cmd[] | null = null
+  let parsedInk: Cmd[] | null = null
+  Object.defineProperty(item, 'fillCommands', {
+    enumerable: true,
+    get() {
+      if (!parsedFill) parsedFill = raw.f ? parsePathData(raw.f, raw.s) : []
+      return parsedFill
+    },
+  })
+  Object.defineProperty(item, 'inkCommands', {
+    enumerable: true,
+    get() {
+      if (!parsedInk) parsedInk = raw.k ? parsePathData(raw.k, raw.s) : []
+      return parsedInk
     },
   })
   return item
@@ -101,6 +125,8 @@ function numbers(): CatalogItem[] {
         worldWidth: 0.5,
         worldHeight: 0.5,
         commands: build(0.5),
+        fillCommands: [],
+        inkCommands: [],
         text: String(value),
         source: 'generated',
       })

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { cssColor, fromHex, hsbToRgb, rgb, rgbToCmyk, rgbToHsb, toHex, toRgb } from '../model/color'
+import { splitShade } from '../model/shading'
 import type { Cmd, Color } from '../model/types'
 
 /** Text field that commits on Enter or blur and shows the current value otherwise. */
@@ -93,14 +94,29 @@ export function Row({ children, wrap }: { children: ReactNode; wrap?: boolean })
 /** Color swatch that opens an inline editor with hex, RGB, HSB, and alpha. */
 export function ColorWell({ color, onChange, label, testId, cmyk, size = 22 }: { color: Color | null; onChange: (color: Color) => void; label?: string; testId?: string; cmyk?: boolean; size?: number }) {
   const [open, setOpen] = useState(false)
+  const [box, setBox] = useState<{ left: number; top: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const place = () => {
+    const rect = ref.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = 250
+    const height = 460
+    let left = rect.right + 8
+    let top = Math.min(rect.top, window.innerHeight - height - 8)
+    if (left + width > window.innerWidth - 8) left = rect.left - width - 8
+    setBox({ left: Math.max(8, left), top: Math.max(8, top) })
+  }
   useEffect(() => {
     if (!open) return
     const close = (event: PointerEvent) => {
       if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
     }
     window.addEventListener('pointerdown', close)
-    return () => window.removeEventListener('pointerdown', close)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('resize', place)
+    }
   }, [open])
   const current = color ?? rgb(0, 0, 0, 0)
   return (
@@ -112,10 +128,13 @@ export function ColorWell({ color, onChange, label, testId, cmyk, size = 22 }: {
         aria-label={label ?? 'Color'}
         title={label}
         style={{ width: size, height: size, background: current.a === 0 ? 'repeating-linear-gradient(45deg, #fff 0 4px, #ccc 4px 8px)' : cssColor(current) }}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          place()
+          setOpen((value) => !value)
+        }}
       />
-      {open && (
-        <div className="popover" data-testid={testId ? `${testId}-editor` : undefined}>
+      {open && box && (
+        <div className="popover" data-testid={testId ? `${testId}-editor` : undefined} style={{ position: 'fixed', left: box.left, top: box.top, bottom: 'auto', width: 250, zIndex: 30 }}>
           <ColorEditor color={current} onChange={onChange} cmyk={cmyk} />
         </div>
       )}
@@ -127,23 +146,65 @@ export function ColorEditor({ color, onChange, cmyk }: { color: Color; onChange:
   const rgbColor = toRgb(color)
   const hsb = rgbToHsb(rgbColor)
   const [hex, setHex] = useState(toHex(color))
+  const field = useRef<HTMLDivElement>(null)
   useEffect(() => setHex(toHex(color)), [color])
   const cmykColor = cmyk ? rgbToCmyk(rgbColor) : null
   const update = (patch: Partial<{ r: number; g: number; b: number; a: number }>) => onChange({ ...rgbColor, ...patch })
+  const commitHex = () => {
+    const parsed = fromHex(hex, rgbColor.a)
+    if (parsed) onChange(parsed)
+  }
+  const pickField = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = field.current?.getBoundingClientRect()
+    if (!bounds) return
+    const saturation = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width))
+    const brightness = Math.min(1, Math.max(0, 1 - (event.clientY - bounds.top) / bounds.height))
+    onChange(hsbToRgb(hsb.h, saturation, brightness, rgbColor.a))
+  }
+  const eyedrop = async () => {
+    const Ctor = (window as unknown as { EyeDropper?: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper
+    if (!Ctor) return
+    try {
+      const result = await new Ctor().open()
+      const parsed = fromHex(result.sRGBHex, rgbColor.a)
+      if (parsed) onChange(parsed)
+    } catch {
+      /* the user cancelled the eyedropper */
+    }
+  }
+  const hue = `hsl(${Math.round(hsb.h)} 100% 50%)`
   return (
     <div className="color-editor">
+      <div
+        ref={field}
+        className="color-field"
+        data-testid="color-field"
+        style={{ background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${hue})` }}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId)
+          pickField(event)
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) pickField(event)
+        }}
+      >
+        <span className="color-knob" style={{ left: `${hsb.s * 100}%`, top: `${(1 - hsb.b) * 100}%` }} />
+      </div>
       <label className="field">
         <span>Hex</span>
         <input
           data-testid="color-hex"
           value={hex}
           onChange={(event) => setHex(event.target.value)}
-          onKeyDown={(event) => event.stopPropagation()}
-          onBlur={() => {
-            const parsed = fromHex(hex, rgbColor.a)
-            if (parsed) onChange(parsed)
+          onKeyDown={(event) => {
+            event.stopPropagation()
+            if (event.key === 'Enter') commitHex()
           }}
+          onBlur={commitHex}
         />
+        <button type="button" data-testid="color-eyedropper" title="Pick a color from the screen" onClick={() => void eyedrop()}>
+          Dropper
+        </button>
       </label>
       <Slider label="R" min={0} max={255} value={rgbColor.r} onChange={(r) => update({ r })} />
       <Slider label="G" min={0} max={255} value={rgbColor.g} onChange={(g) => update({ g })} />
@@ -187,7 +248,7 @@ export function commandsToPath(commands: Cmd[]): string {
 }
 
 /** Tiny SVG preview of a shape's commands, fit into a square. */
-export function ShapePreview({ commands, size = 28, filled }: { commands: Cmd[]; size?: number; filled?: boolean }) {
+export function ShapePreview({ commands, shade, ink, size = 28, filled }: { commands: Cmd[]; shade?: Cmd[]; ink?: Cmd[]; size?: number; filled?: boolean }) {
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
@@ -203,9 +264,14 @@ export function ShapePreview({ commands, size = 28, filled }: { commands: Cmd[];
   const w = maxX - minX || 1
   const h = maxY - minY || 1
   const pad = Math.max(w, h) * 0.08
+  const tones = shade?.length ? splitShade(shade) : { body: [], inset: [] }
+  const stroke = Math.max(w, h) / 28
   return (
     <svg width={size} height={size} viewBox={`${minX - pad} ${minY - pad} ${w + pad * 2} ${h + pad * 2}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <path d={commandsToPath(commands)} fill={filled ? '#dde6f3' : 'none'} stroke="#1c2430" strokeWidth={Math.max(w, h) / 40} vectorEffect="non-scaling-stroke" />
+      {tones.body.length ? <path d={commandsToPath(tones.body)} fill="#d6e0ec" stroke="none" /> : null}
+      {tones.inset.length ? <path d={commandsToPath(tones.inset)} fill="#8ea0b5" stroke="none" /> : null}
+      <path d={commandsToPath(commands)} fill={!shade?.length && filled ? '#dde6f3' : 'none'} stroke="#1c2430" strokeWidth={stroke} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      {ink?.length ? <path d={commandsToPath(ink)} fill="#1c2430" stroke="none" /> : null}
     </svg>
   )
 }

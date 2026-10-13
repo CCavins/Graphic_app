@@ -29,6 +29,13 @@ export function cssColor(color: Color): string {
   return `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`
 }
 
+/** Pull a color toward black so an inset, like a TV screen, reads darker than its body. */
+export function darken(color: Color, amount: number): RGB {
+  const c = toRgb(color)
+  const scale = 1 - Math.min(1, Math.max(0, amount))
+  return rgb(Math.round(c.r * scale), Math.round(c.g * scale), Math.round(c.b * scale), c.a)
+}
+
 export function rgbToHsl(color: RGB): { h: number; s: number; l: number; a: number } {
   const r = color.r / 255
   const g = color.g / 255

@@ -35,8 +35,21 @@ export function LibrariesPanel() {
       <div className="library" data-testid="library-list" onScroll={(event) => setScroll(event.currentTarget.scrollTop)}>
         <div style={{ height: results.length * ROW }}>
           {visible.map((item, index) => (
-            <button key={item.id} className="symbol" data-testid="symbol-item" title={`${item.library} › ${item.category}`} style={{ top: (start + index) * ROW, height: ROW }} onClick={() => editor.placeSymbol(item.id)}>
-              <ShapePreview commands={item.commands} filled={item.source === 'generated' || item.source === 'custom'} />
+            <button
+              key={item.id}
+              className="symbol"
+              data-testid="symbol-item"
+              draggable
+              title={`${item.library} › ${item.category}. Click to place, or drag onto the canvas.`}
+              style={{ top: (start + index) * ROW, height: ROW }}
+              onDragStart={(event) => {
+                event.dataTransfer.setData('application/x-measured-symbol', item.id)
+                event.dataTransfer.setData('text/plain', `symbol:${item.id}`)
+                event.dataTransfer.effectAllowed = 'copy'
+              }}
+              onClick={() => editor.placeSymbol(item.id)}
+            >
+              <ShapePreview commands={item.commands} shade={item.fillCommands} ink={item.inkCommands} filled={item.source === 'generated' || item.source === 'custom'} />
               <span className="symbol-name">{item.name}</span>
               <small>{item.library}</small>
             </button>

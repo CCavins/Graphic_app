@@ -11,6 +11,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { Cmd } from '../src/model/types'
 import { PathBuilder, svgToCommands, xmlTags } from '../src/model/svg'
 
 const DRAWIO_TAG = 'v24.7.17'
@@ -90,6 +91,10 @@ interface OutItem {
   w: number
   h: number
   d: string
+  /** Light filled regions (body shading). Omitted when the symbol is line art. */
+  f?: string
+  /** Dark filled regions, painted in the stroke color. */
+  k?: string
   src: 'drawio' | 'floorplansvg'
 }
 
@@ -116,9 +121,7 @@ function uniqueId(base: string, seen: Set<string>): string {
 }
 
 /** Shift artwork that starts left of or above the origin so its box begins at (0, 0). */
-function normalizeOrigin(path: PathBuilder): void {
-  const dx = path.minX < 0 ? -path.minX : 0
-  const dy = path.minY < 0 ? -path.minY : 0
+function shiftPath(path: PathBuilder, dx: number, dy: number): void {
   if (!dx && !dy) return
   const r = (v: number) => Math.round(v * 100) / 100
   for (const c of path.commands) {
@@ -134,24 +137,111 @@ function normalizeOrigin(path: PathBuilder): void {
   }
   path.maxX += dx
   path.maxY += dy
-  path.minX = 0
-  path.minY = 0
+  path.minX = Math.max(0, path.minX + dx)
+  path.minY = Math.max(0, path.minY + dy)
+}
+
+function normalizeOrigin(paths: PathBuilder[]): void {
+  const drawn = paths.filter((path) => path.commands.length && Number.isFinite(path.minX))
+  if (!drawn.length) return
+  const dx = Math.min(...drawn.map((path) => path.minX)) < 0 ? -Math.min(...drawn.map((path) => path.minX)) : 0
+  const dy = Math.min(...drawn.map((path) => path.minY)) < 0 ? -Math.min(...drawn.map((path) => path.minY)) : 0
+  for (const path of drawn) shiftPath(path, dx, dy)
+}
+
+/** Only closed subpaths can hold a fill; an open stroke stays line art. */
+function closedParts(path: PathBuilder): PathBuilder {
+  const out = new PathBuilder()
+  let batch: PathBuilder | null = null
+  let closed = false
+  const flush = () => {
+    if (batch && closed) out.append(batch)
+    batch = null
+    closed = false
+  }
+  for (const command of path.commands) {
+    if (command.c === 'M') {
+      flush()
+      batch = new PathBuilder()
+      batch.move(command.x, command.y)
+    } else if (!batch) {
+      continue
+    } else if (command.c === 'L') batch.line(command.x, command.y)
+    else if (command.c === 'C') batch.cubic(command.x1, command.y1, command.x2, command.y2, command.x, command.y)
+    else {
+      batch.close()
+      closed = true
+    }
+  }
+  flush()
+  return out
+}
+
+/** draw.io fill colors: light fills become body shading, dark fills become solid ink. */
+function fillTone(color: string): 'none' | 'light' | 'dark' {
+  const value = color.trim().toLowerCase()
+  if (!value || value === 'none') return 'none'
+  if (value === 'stroke' || value === '#000' || value === '#000000' || value === 'black') return 'dark'
+  if (value === 'fill' || value === 'inherit' || value === 'default' || value === '#fff' || value === '#ffffff' || value === 'white') return 'light'
+  const hex = value.replace('#', '')
+  if (hex.length < 6) return 'light'
+  const r = Number.parseInt(hex.slice(0, 2), 16)
+  const g = Number.parseInt(hex.slice(2, 4), 16)
+  const b = Number.parseInt(hex.slice(4, 6), 16)
+  if ([r, g, b].some((channel) => Number.isNaN(channel))) return 'light'
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+  return luminance < 0.45 ? 'dark' : 'light'
 }
 
 function convertStencils(xml: string, source: Source, out: OutItem[], seen: Set<string>): number {
   let count = 0
-  let current: { name: string; w: number; h: number; path: PathBuilder } | null = null
+  let current: {
+    name: string
+    w: number
+    h: number
+    outline: PathBuilder
+    shade: PathBuilder
+    ink: PathBuilder
+    pen: PathBuilder
+    fillColor: string
+    strokeColor: string
+    stack: { fillColor: string; strokeColor: string }[]
+  } | null = null
+  const paint = (op: 'fill' | 'stroke' | 'fillstroke') => {
+    if (!current || !current.pen.commands.length) return
+    const tone = op === 'stroke' ? 'none' : fillTone(current.fillColor)
+    current.outline.append(current.pen)
+    if (tone !== 'none') {
+      const solid = closedParts(current.pen)
+      if (solid.commands.length) (tone === 'light' ? current.shade : current.ink).append(solid)
+    }
+    current.pen = new PathBuilder()
+  }
   for (const tag of xmlTags(xml)) {
     if (tag.name === 'shape' && !tag.close) {
-      current = { name: tag.attrs.name ?? 'Shape', w: Number(tag.attrs.w) || 100, h: Number(tag.attrs.h) || 100, path: new PathBuilder() }
+      current = {
+        name: tag.attrs.name ?? 'Shape',
+        w: Number(tag.attrs.w) || 100,
+        h: Number(tag.attrs.h) || 100,
+        outline: new PathBuilder(),
+        shade: new PathBuilder(),
+        ink: new PathBuilder(),
+        pen: new PathBuilder(),
+        fillColor: 'inherit',
+        strokeColor: 'inherit',
+        stack: [],
+      }
       continue
     }
     if (tag.name === 'shape' && tag.close) {
-      if (current && current.path.commands.length) {
-        normalizeOrigin(current.path)
+      if (current) paint('stroke')
+      if (current && current.outline.commands.length) {
+        normalizeOrigin([current.outline, current.shade, current.ink])
         const name = current.name.replace(/_/g, ' ').trim()
         const id = uniqueId(`${source.cat} ${name}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), seen)
-        out.push({
+        const maxX = Math.max(current.outline.maxX, current.shade.maxX || 0, current.ink.maxX || 0)
+        const maxY = Math.max(current.outline.maxY, current.shade.maxY || 0, current.ink.maxY || 0)
+        const item: OutItem = {
           id,
           name,
           lib: source.lib,
@@ -159,18 +249,21 @@ function convertStencils(xml: string, source: Source, out: OutItem[], seen: Set<
           tags: [...source.tags, ...name.toLowerCase().split(/[\s/-]+/).filter((word) => word.length > 1)],
           s: source.scale,
           // Some stencils draw past their declared box; the box must always contain the artwork.
-          w: Math.round(Math.max(current.w, current.path.maxX - Math.min(0, current.path.minX)) * 100) / 100,
-          h: Math.round(Math.max(current.h, current.path.maxY - Math.min(0, current.path.minY)) * 100) / 100,
-          d: current.path.toString(),
+          w: Math.round(Math.max(current.w, maxX) * 100) / 100,
+          h: Math.round(Math.max(current.h, maxY) * 100) / 100,
+          d: current.outline.toString(),
           src: 'drawio',
-        })
+        }
+        if (current.shade.commands.length) item.f = current.shade.toString()
+        if (current.ink.commands.length) item.k = current.ink.toString()
+        out.push(item)
         count++
       }
       current = null
       continue
     }
     if (!current || tag.close) continue
-    const p = current.path
+    const p = current.pen
     const a = tag.attrs
     const num = (key: string) => Number(a[key]) || 0
     switch (tag.name) {
@@ -204,6 +297,32 @@ function convertStencils(xml: string, source: Source, out: OutItem[], seen: Set<
       case 'ellipse':
         p.ellipse(num('x'), num('y'), num('w'), num('h'))
         break
+      case 'fillstroke':
+        paint('fillstroke')
+        break
+      case 'fill':
+        paint('fill')
+        break
+      case 'stroke':
+        paint('stroke')
+        break
+      case 'fillcolor':
+        current.fillColor = a.color ?? 'inherit'
+        break
+      case 'strokecolor':
+        current.strokeColor = a.color ?? 'inherit'
+        break
+      case 'save':
+        current.stack.push({ fillColor: current.fillColor, strokeColor: current.strokeColor })
+        break
+      case 'restore': {
+        const saved = current.stack.pop()
+        if (saved) {
+          current.fillColor = saved.fillColor
+          current.strokeColor = saved.strokeColor
+        }
+        break
+      }
       default:
         break
     }
@@ -217,19 +336,25 @@ function convertSvg(svg: string, name: string, out: OutItem[], seen: Set<string>
   const unitsPerMm = viewBox && viewBox[2] && widthMm ? viewBox[2] / widthMm : 1
   const parsed = svgToCommands(svg)
   if (!parsed.commands.length) return false
-  const builder = new PathBuilder()
   const k = 1 / unitsPerMm
-  for (const c of parsed.commands) {
-    if (c.c === 'M') builder.move(c.x * k, c.y * k)
-    else if (c.c === 'L') builder.line(c.x * k, c.y * k)
-    else if (c.c === 'C') builder.cubic(c.x1 * k, c.y1 * k, c.x2 * k, c.y2 * k, c.x * k, c.y * k)
-    else builder.close()
+  const scaled = (commands: Cmd[]) => {
+    const builder = new PathBuilder()
+    for (const c of commands) {
+      if (c.c === 'M') builder.move(c.x * k, c.y * k)
+      else if (c.c === 'L') builder.line(c.x * k, c.y * k)
+      else if (c.c === 'C') builder.cubic(c.x1 * k, c.y1 * k, c.x2 * k, c.y2 * k, c.x * k, c.y * k)
+      else builder.close()
+    }
+    return builder
   }
+  const builder = scaled(parsed.commands)
+  const shade = scaled(parsed.shade)
+  const ink = scaled(parsed.ink)
   const label = name.replace(/([a-z])([A-Z0-9])/g, '$1 $2').replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
   const id = `floor-plan-svg-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
   if (seen.has(id)) return false
   seen.add(id)
-  out.push({
+  const item: OutItem = {
     id,
     name: label,
     lib: 'Floor Plans',
@@ -240,7 +365,10 @@ function convertSvg(svg: string, name: string, out: OutItem[], seen: Set<string>
     h: Math.round(Math.max(parsed.height * k, builder.maxY) * 100) / 100,
     d: builder.toString(),
     src: 'floorplansvg',
-  })
+  }
+  if (shade.commands.length) item.f = shade.toString()
+  if (ink.commands.length) item.k = ink.toString()
+  out.push(item)
   return true
 }
 

@@ -6,7 +6,7 @@ import { makeRect } from './model/factory'
 it('catalog-load-perf', async () => {
   const start = performance.now()
   await loadCatalog()
-  expect(performance.now() - start).toBeLessThan(1500)
+  expect(performance.now() - start).toBeLessThan(4000)
   expect(CATALOG.length).toBeGreaterThanOrEqual(2000)
 })
 

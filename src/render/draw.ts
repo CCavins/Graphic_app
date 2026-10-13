@@ -1,6 +1,7 @@
-import { cssColor } from '../model/color'
+import { cssColor, darken } from '../model/color'
 import { RULER_SIZE, type Editor } from '../editor/editor'
 import { commandsBounds, pivotOf, sampleCommands } from '../model/geometry'
+import { splitShade } from '../model/shading'
 import { labelAnchor, labelText, placedLabels } from '../model/labels'
 import { anchors } from '../model/transform'
 import type { BlendMode, EffectAttr, FillAttr, PatternDef, SceneNode, StrokeAttr } from '../model/types'
@@ -157,11 +158,34 @@ function drawNode(ctx: CanvasRenderingContext2D, node: SceneNode, editor: Editor
       ctx.save()
       ctx.globalAlpha *= attr.opacity
       ctx.fillStyle = fillStyleFor(ctx, attr, node, editor)
-      trace(ctx, node)
-      ctx.fill()
+      if (node.shade?.length) {
+        // Body first, then a darker inset (a screen inside a TV) so the two tones stay distinct.
+        const { body, inset } = splitShade(node.shade)
+        if (body.length) {
+          trace(ctx, { commands: body })
+          ctx.fill()
+        }
+        if (inset.length && !attr.gradient && !attr.patternId && !attr.imageId) {
+          ctx.fillStyle = cssColor(darken(attr.color, 0.28))
+          trace(ctx, { commands: inset })
+          ctx.fill()
+        }
+      } else {
+        trace(ctx, node)
+        ctx.fill()
+      }
       ctx.restore()
     }
-    if (attr.kind === 'stroke') drawStroke(ctx, node, attr)
+    if (attr.kind === 'stroke') {
+      if (node.ink?.length) {
+        ctx.save()
+        ctx.fillStyle = cssColor(attr.color)
+        trace(ctx, { commands: node.ink })
+        ctx.fill()
+        ctx.restore()
+      }
+      drawStroke(ctx, node, attr)
+    }
   }
   if (node.kind === 'image' && node.imageId) {
     const href = editor.doc.images[node.imageId]

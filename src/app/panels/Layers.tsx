@@ -1,12 +1,60 @@
 import { useState } from 'react'
 import { BLEND_MODES, type BlendMode, type Layer, type SceneNode } from '../../model/types'
+import { OrgIcon, type OrgIconName } from '../icons'
 import { editor } from '../instance'
 import { Row, Slider } from '../ui'
+
+type ActionGroup = 'arrange' | 'combine' | 'path'
+
+const ACTION_GROUPS: { id: ActionGroup; label: string; hint: string; actions: { id?: string; label: string; shortcut?: string; detail: string; icon?: OrgIconName; run: () => void }[] }[] = [
+  {
+    id: 'arrange',
+    label: 'Arrange',
+    hint: 'Keep shapes together, or use one shape to hide another.',
+    actions: [
+      { id: 'group', label: 'Group', shortcut: '⌘G', icon: 'group', detail: 'Move and resize the selection as one object.', run: () => editor.group() },
+      { id: 'ungroup', label: 'Ungroup', shortcut: '⌘⇧G', icon: 'ungroup', detail: 'Separate a group back into its shapes.', run: () => editor.ungroup() },
+      { id: 'clip', label: 'Mask', detail: 'Hide everything outside the front shape.', run: () => editor.clipSelection() },
+      { label: 'Release mask', detail: 'Show the shapes a mask was hiding.', run: () => editor.releaseClip() },
+      { id: 'compound', label: 'Compound', shortcut: '⌘8', detail: 'Turn overlapping areas into holes.', run: () => editor.compound() },
+      { label: 'Release compound', detail: 'Split a compound path into separate shapes.', run: () => editor.releaseCompound() },
+    ],
+  },
+  {
+    id: 'combine',
+    label: 'Combine',
+    hint: 'Works on two or more closed shapes. The front shape is the cutter.',
+    actions: [
+      { id: 'union', label: 'Union', detail: 'Merge the shapes into one outline.', run: () => editor.boolean('union') },
+      { label: 'Subtract', detail: 'Cut the front shape out of the one behind it.', run: () => editor.boolean('subtract') },
+      { label: 'Intersect', detail: 'Keep only the area where the shapes overlap.', run: () => editor.boolean('intersect') },
+      { label: 'Exclude', detail: 'Remove the overlap and keep the rest.', run: () => editor.boolean('exclude') },
+      { label: 'Divide', detail: 'Split the shapes into a piece for every overlap.', run: () => editor.boolean('divide') },
+    ],
+  },
+  {
+    id: 'path',
+    label: 'Path',
+    hint: 'Change an open path, its ends, or its points.',
+    actions: [
+      { id: 'join', label: 'Join', detail: 'Combine two open paths into one path.', run: () => editor.join() },
+      { label: 'Connect', shortcut: '⌘J', detail: 'Join the two closest open ends.', run: () => editor.connectEndpoints() },
+      { label: 'Disconnect', detail: 'Break the path at the selected point.', run: () => editor.disconnectAnchor() },
+      { label: 'Close', detail: 'Connect the start of a path to its end.', run: () => editor.closeSelected() },
+      { label: 'Open', detail: 'Remove the segment that closes a path.', run: () => editor.openSelected() },
+      { label: 'Reverse', detail: 'Flip which end of the path is the start.', run: () => editor.reverseSelected() },
+      { id: 'outline-stroke', label: 'Outline stroke', detail: 'Turn the stroke into a filled shape.', run: () => editor.outlineSelected() },
+      { label: 'Convert anchor', detail: 'Change the selected point between a corner and a curve.', run: () => editor.convertAnchor() },
+    ],
+  },
+]
 
 export function LayersPanel() {
   const doc = editor.doc
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [actionGroup, setActionGroup] = useState<ActionGroup>('arrange')
   const active = doc.layers.find((layer) => layer.id === doc.activeLayerId)
+  const actions = ACTION_GROUPS.find((group) => group.id === actionGroup) ?? ACTION_GROUPS[0]
   return (
     <div className="stack" data-testid="layers">
       <Row wrap>
@@ -40,31 +88,20 @@ export function LayersPanel() {
           </div>
         </>
       )}
-      <Row wrap>
-        <button data-testid="group" onClick={() => editor.group()}>Group ⌘G</button>
-        <button data-testid="ungroup" onClick={() => editor.ungroup()}>Ungroup</button>
-        <button data-testid="clip" onClick={() => editor.clipSelection()}>Mask</button>
-        <button onClick={() => editor.releaseClip()}>Release mask</button>
-        <button data-testid="compound" onClick={() => editor.compound()}>Compound ⌘8</button>
-        <button onClick={() => editor.releaseCompound()}>Release compound</button>
-      </Row>
-      <Row wrap>
-        <button data-testid="union" onClick={() => editor.boolean('union')}>Union</button>
-        <button onClick={() => editor.boolean('subtract')}>Subtract</button>
-        <button onClick={() => editor.boolean('intersect')}>Intersect</button>
-        <button onClick={() => editor.boolean('exclude')}>Exclude</button>
-        <button onClick={() => editor.boolean('divide')}>Divide</button>
-      </Row>
-      <Row wrap>
-        <button data-testid="join" onClick={() => editor.join()}>Join</button>
-        <button onClick={() => editor.connectEndpoints()}>Connect ⌘J</button>
-        <button onClick={() => editor.disconnectAnchor()}>Disconnect</button>
-        <button onClick={() => editor.closeSelected()}>Close</button>
-        <button onClick={() => editor.openSelected()}>Open</button>
-        <button onClick={() => editor.reverseSelected()}>Reverse</button>
-        <button data-testid="outline-stroke" onClick={() => editor.outlineSelected()}>Outline stroke</button>
-        <button onClick={() => editor.convertAnchor()}>Convert anchor</button>
-      </Row>
+      <div className="segmented action-switch" role="group" aria-label="Object actions">
+        {ACTION_GROUPS.map((group) => (
+          <button key={group.id} type="button" data-testid={`actions-${group.id}`} data-active={actionGroup === group.id} onClick={() => setActionGroup(group.id)}>{group.label}</button>
+        ))}
+      </div>
+      <p className="hint">{actions.hint}</p>
+      <div className="action-list">
+        {actions.actions.map((action) => (
+          <button key={action.label} type="button" className="action" data-testid={action.id} onClick={action.run}>
+            <span className="action-name">{action.icon && <OrgIcon name={action.icon} />}{action.label}{action.shortcut && <kbd>{action.shortcut}</kbd>}</span>
+            <span className="action-detail">{action.detail}</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
