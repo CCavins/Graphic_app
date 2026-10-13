@@ -171,10 +171,57 @@ export function distToSegment(p: Pt, a: Pt, b: Pt): number {
   return Math.hypot(p.x - x, p.y - y)
 }
 
-export function localToPaper(node: Pick<SceneNode, 'x' | 'y' | 'rotation' | 'commands'>, local: Pt): Pt {
-  const b = commandsBounds(node.commands)
-  const cx = b.x + b.w / 2
-  const cy = b.y + b.h / 2
+/** The subset of a node that positioning math needs; fake nodes may omit kind, text, and children. */
+export type Placed = Pick<SceneNode, 'x' | 'y' | 'rotation' | 'commands'> & Partial<Pick<SceneNode, 'kind' | 'text' | 'children' | 'dimension'>>
+
+function pointsBounds(points: Pt[]): Rect | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const p of points) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  if (!Number.isFinite(minX)) return null
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+/** Tight bounds of the drawn curve (not its control points). */
+export function tightBounds(commands: Cmd[]): Rect {
+  return pointsBounds(sampleCommands(commands)) ?? { x: 0, y: 0, w: 0, h: 0 }
+}
+
+/**
+ * Bounds in the node's own coordinate space, before its rotation and position.
+ * Groups use the union of their children; text uses its frame; dimensions their two points.
+ */
+export function localBounds(node: Placed): Rect {
+  if (node.kind === 'text' && node.text) {
+    const frame = textFrame(node as SceneNode)
+    if (frame) return { x: 0, y: 0, w: frame.w, h: frame.h }
+  }
+  if (node.dimension) {
+    const d = node.dimension
+    return { x: Math.min(d.x1, d.x2), y: Math.min(d.y1, d.y2), w: Math.abs(d.x2 - d.x1), h: Math.abs(d.y2 - d.y1) }
+  }
+  if (node.kind === 'group' && node.children?.length) {
+    return unionBounds(node.children.map((child) => paperBounds(child)))
+  }
+  if (!node.commands.length) return { x: 0, y: 0, w: 0, h: 0 }
+  return tightBounds(node.commands)
+}
+
+/** The point a node rotates around, in its own coordinate space: the center of its local bounds. */
+export function pivotOf(node: Placed): Pt {
+  const b = localBounds(node)
+  return pt(b.x + b.w / 2, b.y + b.h / 2)
+}
+
+export function localToPaper(node: Placed, local: Pt): Pt {
+  const { x: cx, y: cy } = pivotOf(node)
   const dx = local.x - cx
   const dy = local.y - cy
   const cos = Math.cos(node.rotation)
@@ -185,15 +232,24 @@ export function localToPaper(node: Pick<SceneNode, 'x' | 'y' | 'rotation' | 'com
   }
 }
 
-export function paperToLocal(node: Pick<SceneNode, 'x' | 'y' | 'rotation' | 'commands'>, paper: Pt): Pt {
-  const b = commandsBounds(node.commands)
-  const cx = b.x + b.w / 2
-  const cy = b.y + b.h / 2
+export function paperToLocal(node: Placed, paper: Pt): Pt {
+  const { x: cx, y: cy } = pivotOf(node)
   const cos = Math.cos(node.rotation)
   const sin = Math.sin(node.rotation)
   const dx = paper.x - node.x - cx
   const dy = paper.y - node.y - cy
   return { x: cx + dx * cos + dy * sin, y: cy + -dx * sin + dy * cos }
+}
+
+/** The four corners of the node's local bounds in paper space, clockwise from the local top-left. */
+export function orientedCorners(node: Placed): [Pt, Pt, Pt, Pt] {
+  const b = localBounds(node)
+  return [
+    localToPaper(node, pt(b.x, b.y)),
+    localToPaper(node, pt(b.x + b.w, b.y)),
+    localToPaper(node, pt(b.x + b.w, b.y + b.h)),
+    localToPaper(node, pt(b.x, b.y + b.h)),
+  ]
 }
 
 export function paperBounds(node: SceneNode): Rect {
@@ -206,32 +262,29 @@ export function paperBounds(node: SceneNode): Rect {
     const ys = [d.y1, d.y2, d.y1 + oy, d.y2 + oy].map((v) => v + node.y)
     return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }
   }
-  const samples = sampleCommands(node.commands.length ? node.commands : [cmd('M', 0, 0), cmd('L', 1, 0), cmd('L', 1, 1), cmd('L', 0, 1)])
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const p of samples) {
-    const q = localToPaper(node, p)
-    minX = Math.min(minX, q.x)
-    minY = Math.min(minY, q.y)
-    maxX = Math.max(maxX, q.x)
-    maxY = Math.max(maxY, q.y)
+  if (node.kind === 'group') {
+    // Groups are not rotated themselves; their children carry the rotation.
+    const inner = localBounds(node)
+    return { x: inner.x + node.x, y: inner.y + node.y, w: inner.w, h: inner.h }
   }
   if (node.kind === 'text' && node.text) {
-    const w = node.text.mode === 'field' ? node.text.fieldWidth : Math.max(20, node.text.content.length * node.text.fontSize * 0.5)
-    const h = node.text.fontSize * 1.4
-    const corners = [pt(0, 0), pt(w, 0), pt(w, h), pt(0, h)]
-    for (const c of corners) {
-      const q = localToPaper({ ...node, commands: [cmd('M', 0, 0), cmd('L', w, 0), cmd('L', w, h)] }, c)
-      minX = Math.min(minX, q.x)
-      minY = Math.min(minY, q.y)
-      maxX = Math.max(maxX, q.x)
-      maxY = Math.max(maxY, q.y)
-    }
+    return pointsBounds(orientedCorners(node)) ?? { x: node.x, y: node.y, w: 0, h: 0 }
   }
-  if (!Number.isFinite(minX)) return { x: node.x, y: node.y, w: 0, h: 0 }
-  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+  if (!node.commands.length) return { x: node.x, y: node.y, w: 0, h: 0 }
+  if (node.rotation === 0) {
+    const b = tightBounds(node.commands)
+    return { x: b.x + node.x, y: b.y + node.y, w: b.w, h: b.h }
+  }
+  const samples = sampleCommands(node.commands)
+  const pivot = pivotOf(node)
+  const cos = Math.cos(node.rotation)
+  const sin = Math.sin(node.rotation)
+  const rotated = samples.map((p) => {
+    const dx = p.x - pivot.x
+    const dy = p.y - pivot.y
+    return pt(node.x + pivot.x + dx * cos - dy * sin, node.y + pivot.y + dx * sin + dy * cos)
+  })
+  return pointsBounds(rotated) ?? { x: node.x, y: node.y, w: 0, h: 0 }
 }
 
 export function textFrame(node: SceneNode): { w: number; h: number } | null {
@@ -257,13 +310,17 @@ export function hitNode(node: SceneNode, paper: Pt, tolerance: number): boolean 
     const b2 = pt(b.x + ox, b.y + oy)
     return distToSegment(paper, a2, b2) <= tolerance + 2 || distToSegment(paper, a, a2) <= tolerance || distToSegment(paper, b, b2) <= tolerance
   }
+  if (node.kind === 'group') {
+    const inner = pt(paper.x - node.x, paper.y - node.y)
+    return node.children.some((child) => hitNode(child, inner, tolerance))
+  }
   const local = paperToLocal(node, paper)
   const frame = textFrame(node)
   if (frame) {
     return local.x >= -tolerance && local.y >= -tolerance && local.x <= frame.w + tolerance && local.y <= frame.h + tolerance
   }
   if (node.kind === 'image' || node.symbolId) {
-    const b = commandsBounds(node.commands)
+    const b = tightBounds(node.commands)
     if (local.x >= b.x - tolerance && local.y >= b.y - tolerance && local.x <= b.x + b.w + tolerance && local.y <= b.y + b.h + tolerance) return true
   }
   const poly = sampleCommands(node.commands)

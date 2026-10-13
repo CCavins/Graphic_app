@@ -1,6 +1,6 @@
 import { cssColor } from '../model/color'
 import { RULER_SIZE, type Editor } from '../editor/editor'
-import { commandsBounds, sampleCommands } from '../model/geometry'
+import { commandsBounds, pivotOf, sampleCommands } from '../model/geometry'
 import { labelAnchor, labelText, placedLabels } from '../model/labels'
 import { anchors } from '../model/transform'
 import type { BlendMode, EffectAttr, FillAttr, PatternDef, SceneNode, StrokeAttr } from '../model/types'
@@ -112,8 +112,7 @@ function drawNode(ctx: CanvasRenderingContext2D, node: SceneNode, editor: Editor
     return
   }
   ctx.save()
-  ctx.translate(x, y)
-  ctx.rotate(node.rotation)
+  applyNodeTransform(ctx, { ...node, x, y })
   ctx.globalAlpha *= node.opacity
   ctx.globalCompositeOperation = COMPOSITE[node.blendMode] ?? 'source-over'
   if (editor.doc.canvas.viewMode === 'outline') {
@@ -639,43 +638,55 @@ function drawRulers(ctx: CanvasRenderingContext2D, width: number, height: number
   void fromInches
 }
 
+/** Position and turn the context for a node: rotation happens about the node's pivot, like hit-testing and bounds. */
+function applyNodeTransform(ctx: CanvasRenderingContext2D, node: SceneNode): void {
+  ctx.translate(node.x, node.y)
+  if (node.rotation) {
+    const pivot = pivotOf(node)
+    ctx.translate(pivot.x, pivot.y)
+    ctx.rotate(node.rotation)
+    ctx.translate(-pivot.x, -pivot.y)
+  }
+}
+
 function drawSelection(ctx: CanvasRenderingContext2D, editor: Editor): void {
-  const box = editor.selectionRect()
-  if (!box) return
+  const frame = editor.selectionFrame()
+  if (!frame) return
   const zoom = editor.view.zoom
   ctx.save()
   ctx.strokeStyle = editor.doc.canvas.selectionColor
   ctx.lineWidth = 1 / zoom
-  ctx.strokeRect(box.x, box.y, box.w, box.h)
+  // The frame turns with a rotated object instead of staying an upright box around it.
+  ctx.beginPath()
+  frame.corners.forEach((corner, index) => (index === 0 ? ctx.moveTo(corner.x, corner.y) : ctx.lineTo(corner.x, corner.y)))
+  ctx.closePath()
+  ctx.stroke()
   const handleSize = 7 / zoom
-  const handles = [
-    [box.x, box.y],
-    [box.x + box.w / 2, box.y],
-    [box.x + box.w, box.y],
-    [box.x + box.w, box.y + box.h / 2],
-    [box.x + box.w, box.y + box.h],
-    [box.x + box.w / 2, box.y + box.h],
-    [box.x, box.y + box.h],
-    [box.x, box.y + box.h / 2],
-  ]
+  const handles = editor.handlePositions()
+  const top = handles.find((handle) => handle.name === 'n')!
+  const rotate = handles.find((handle) => handle.name === 'rotate')!
   ctx.fillStyle = 'white'
-  for (const [hx, hy] of handles) {
-    ctx.fillRect(hx - handleSize / 2, hy - handleSize / 2, handleSize, handleSize)
-    ctx.strokeRect(hx - handleSize / 2, hy - handleSize / 2, handleSize, handleSize)
+  for (const handle of handles) {
+    if (handle.name === 'rotate') continue
+    ctx.save()
+    ctx.translate(handle.x, handle.y)
+    ctx.rotate(frame.angle)
+    ctx.fillRect(-handleSize / 2, -handleSize / 2, handleSize, handleSize)
+    ctx.strokeRect(-handleSize / 2, -handleSize / 2, handleSize, handleSize)
+    ctx.restore()
   }
   ctx.beginPath()
-  ctx.moveTo(box.x + box.w / 2, box.y)
-  ctx.lineTo(box.x + box.w / 2, box.y - 28 / zoom)
+  ctx.moveTo(top.x, top.y)
+  ctx.lineTo(rotate.x, rotate.y)
   ctx.stroke()
   ctx.beginPath()
-  ctx.arc(box.x + box.w / 2, box.y - 28 / zoom, handleSize / 2, 0, Math.PI * 2)
+  ctx.arc(rotate.x, rotate.y, handleSize / 2, 0, Math.PI * 2)
   ctx.fill()
   ctx.stroke()
   const node = editor.one()
   if (node && editor.tool === 'pathSelect' && node.kind === 'path') {
     ctx.save()
-    ctx.translate(node.x, node.y)
-    ctx.rotate(node.rotation)
+    applyNodeTransform(ctx, node)
     for (const anchor of anchors(node.commands)) {
       const active = editor.anchor?.id === node.id && editor.anchor.index === anchor.index
       ctx.fillStyle = active ? editor.doc.canvas.selectionColor : 'white'
@@ -688,8 +699,7 @@ function drawSelection(ctx: CanvasRenderingContext2D, editor: Editor): void {
     const fill = editor.fillOf(node)
     if (fill?.gradient) {
       ctx.save()
-      ctx.translate(node.x, node.y)
-      ctx.rotate(node.rotation)
+      applyNodeTransform(ctx, node)
       ctx.beginPath()
       ctx.moveTo(fill.gradient.x1, fill.gradient.y1)
       ctx.lineTo(fill.gradient.x2, fill.gradient.y2)

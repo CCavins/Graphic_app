@@ -23,9 +23,12 @@ import {
   cmd,
   commandsBounds,
   hitNode,
+  localBounds,
   localToPaper,
+  orientedCorners,
   paperBounds,
   paperToLocal,
+  pivotOf,
   reverseCommands,
   scaleCommands,
   smoothCommands,
@@ -66,6 +69,8 @@ import {
   nearestAnchor,
   nodesInRect,
   paperCommands,
+  rotateNode,
+  scaleLocal,
   splitPath,
   transformNodes,
 } from '../model/transform'
@@ -169,13 +174,28 @@ export interface CustomLibrary {
   items: CatalogItem[]
 }
 
+interface DragOrigin {
+  id: string
+  x: number
+  y: number
+  rotation: number
+  commands: SceneNode['commands']
+  /** Groups keep a copy of their children so a resize can be recomputed from the press each move. */
+  children?: SceneNode[]
+  dimension?: SceneNode['dimension']
+  text?: SceneNode['text']
+}
+
 interface Drag {
   kind: 'create' | 'move' | 'handle' | 'pan' | 'pen' | 'pencil' | 'pinch' | 'zoom' | 'marquee' | 'gradient' | 'eraser' | 'anchor' | 'guide'
   start: Pt
   origin: Pt
   ids: string[]
-  origins: { id: string; x: number; y: number; rotation: number; commands: SceneNode['commands'] }[]
+  origins: DragOrigin[]
   handle?: string
+  /** Paper-space pivot for rotate handles and the union box for multi-object resizes, captured at press. */
+  pivot?: Pt
+  box?: Rect
   moved: boolean
   pointerId: number
   duplicated?: boolean
@@ -526,9 +546,15 @@ export class Editor {
     }
     if (this.tool === 'select' || this.tool === 'pathSelect') {
       // A lone dimension line has no resize handles: pressing on it moves it.
-      const handle = this.one()?.kind === 'dimension' ? null : this.hitHandle(paper, pointer.type)
+      const loneDimension = this.selection.length === 1 && this.one()?.kind === 'dimension'
+      const handle = loneDimension ? null : this.hitHandle(paper, pointer.type)
       if (handle && this.selection.length) {
         if (pointer.alt || this.touchMods.duplicate) this.duplicateSelection()
+        const frame = this.selectionFrame()!
+        const pivot = {
+          x: (frame.corners[0].x + frame.corners[2].x) / 2,
+          y: (frame.corners[0].y + frame.corners[2].y) / 2,
+        }
         this.drag = {
           kind: 'handle',
           handle,
@@ -536,6 +562,8 @@ export class Editor {
           origin: paper,
           ids: [...this.selection],
           origins: this.captureOrigins(),
+          pivot,
+          box: selectionBounds(this.doc, this.selection),
           moved: false,
           pointerId: pointer.pointerId,
         }
@@ -674,7 +702,11 @@ export class Editor {
       if (emit) this.emit()
       return
     }
-    if (this.drag.kind === 'move' || this.drag.kind === 'handle') {
+    if (this.drag.kind === 'handle') {
+      this.applyHandle(paper, this.constrain(pointer))
+      return
+    }
+    if (this.drag.kind === 'move') {
       this.applyMove(paper)
       return
     }
@@ -888,8 +920,79 @@ export class Editor {
   private captureOrigins(): Drag['origins'] {
     return this.selection.flatMap((id) => {
       const node = findNode(this.doc, id)
-      return node ? [{ id, x: node.x, y: node.y, rotation: node.rotation, commands: structuredClone(node.commands) }] : []
+      if (!node) return []
+      return [
+        {
+          id,
+          x: node.x,
+          y: node.y,
+          rotation: node.rotation,
+          commands: structuredClone(node.commands),
+          children: node.kind === 'group' ? structuredClone(node.children) : undefined,
+          dimension: node.dimension ? { ...node.dimension } : undefined,
+          text: node.text ? { ...node.text } : undefined,
+        },
+      ]
     })
+  }
+
+  /** Put a node back to how it was at the press so a handle drag is recomputed from scratch each move. */
+  private restoreOrigin(node: SceneNode, origin: DragOrigin): void {
+    node.x = origin.x
+    node.y = origin.y
+    node.rotation = origin.rotation
+    node.commands = structuredClone(origin.commands)
+    if (origin.children) node.children = structuredClone(origin.children)
+    if (origin.dimension) node.dimension = { ...origin.dimension }
+    if (origin.text && node.text) Object.assign(node.text, { fontSize: origin.text.fontSize, fieldWidth: origin.text.fieldWidth })
+  }
+
+  /**
+   * The selection frame drawn on the canvas. A single rotated object shows its own box turned with it;
+   * groups, dimensions, and multiple objects show the axis-aligned union.
+   */
+  selectionFrame(): { corners: [Pt, Pt, Pt, Pt]; angle: number } | null {
+    if (!this.selection.length) return null
+    const node = this.selection.length === 1 ? this.one() : undefined
+    if (node && node.kind !== 'group' && node.kind !== 'dimension') {
+      return { corners: orientedCorners(node), angle: node.rotation }
+    }
+    const b = selectionBounds(this.doc, this.selection)
+    return {
+      corners: [
+        { x: b.x, y: b.y },
+        { x: b.x + b.w, y: b.y },
+        { x: b.x + b.w, y: b.y + b.h },
+        { x: b.x, y: b.y + b.h },
+      ],
+      angle: 0,
+    }
+  }
+
+  /** Handle positions in paper space: corners, edge midpoints, and the rotate knob above the top edge. */
+  handlePositions(): { name: string; x: number; y: number }[] {
+    const frame = this.selectionFrame()
+    if (!frame) return []
+    const [nw, ne, se, sw] = frame.corners
+    const mid = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+    const n = mid(nw, ne)
+    const s = mid(sw, se)
+    const center = mid(n, s)
+    // "Up" is away from the center through the top edge; when the box is degenerate fall back to paper up.
+    const upLength = Math.hypot(n.x - center.x, n.y - center.y)
+    const up = upLength > 1e-6 ? { x: (n.x - center.x) / upLength, y: (n.y - center.y) / upLength } : { x: -Math.sin(frame.angle), y: -Math.cos(frame.angle) }
+    const offset = 28 / this.view.zoom
+    return [
+      { name: 'nw', ...nw },
+      { name: 'n', ...n },
+      { name: 'ne', ...ne },
+      { name: 'e', ...mid(ne, se) },
+      { name: 'se', ...se },
+      { name: 's', ...s },
+      { name: 'sw', ...sw },
+      { name: 'w', ...mid(nw, sw) },
+      { name: 'rotate', x: n.x + up.x * offset, y: n.y + up.y * offset },
+    ]
   }
 
   private applyMove(paper: Pt): void {
@@ -905,18 +1008,125 @@ export class Editor {
     for (const origin of this.drag.origins) {
       const node = findNode(this.doc, origin.id)
       if (!node || node.locked) continue
-      if (this.drag.kind === 'handle' && this.drag.handle) this.resizeHandle(node, origin, this.drag.handle, dx, dy)
-      else {
-        node.x = origin.x + dx
-        node.y = origin.y + dy
-      }
+      node.x = origin.x + dx
+      node.y = origin.y + dy
     }
     const box = selectionBounds(this.doc, this.selection)
-    this.readout = this.drag.kind === 'move' ? `${this.formatPoints(box.x)}, ${this.formatPoints(box.y)}` : `${this.formatPoints(box.w)} × ${this.formatPoints(box.h)}`
+    this.readout = `${this.formatPoints(box.x)}, ${this.formatPoints(box.y)}`
     this.gaps = []
     const nodes = selectedNodes(this.doc, this.selection)
     if (nodes[0]) this.gaps = this.measureGaps(nodes[0])
     this.emit()
+  }
+
+  /** Resize or rotate handles. Everything is recomputed from the press so the math never drifts. */
+  private applyHandle(paper: Pt, constrain: boolean): void {
+    const drag = this.drag
+    if (!drag || !drag.handle || !drag.pivot || !drag.box) return
+    const live = drag.origins.flatMap((origin) => {
+      const node = findNode(this.doc, origin.id)
+      return node && !node.locked ? [{ node, origin }] : []
+    })
+    if (!live.length) return
+    for (const { node, origin } of live) this.restoreOrigin(node, origin)
+    this.smartLines = []
+    this.gaps = []
+    if (drag.handle === 'rotate') {
+      const center = drag.pivot
+      const a0 = Math.atan2(drag.start.y - center.y, drag.start.x - center.x)
+      const a1 = Math.atan2(paper.y - center.y, paper.x - center.x)
+      let delta = a1 - a0
+      if (constrain) {
+        const step = Math.PI / 12
+        const base = live.length === 1 ? live[0].origin.rotation : 0
+        delta = Math.round((base + delta) / step) * step - base
+      }
+      for (const { node } of live) rotateNode(node, delta, center)
+      const shown = live.length === 1 ? live[0].node.rotation : delta
+      this.readout = `${Math.round((((shown * 180) / Math.PI) % 360) * 10) / 10}°`
+      this.emit()
+      return
+    }
+    const dx = paper.x - drag.start.x
+    const dy = paper.y - drag.start.y
+    const single = live.length === 1 && live[0].node.kind !== 'group' && live[0].node.kind !== 'dimension' ? live[0] : null
+    if (single) {
+      this.resizeOriented(single.node, drag.handle, dx, dy, constrain)
+    } else {
+      this.resizeUnion(live.map((entry) => entry.node), drag.box, drag.handle, dx, dy, constrain)
+    }
+    const box = selectionBounds(this.doc, this.selection)
+    const frame = single ? localBounds(single.node) : box
+    this.readout = `${this.formatPoints(frame.w)} × ${this.formatPoints(frame.h)}`
+    const nodes = selectedNodes(this.doc, this.selection)
+    if (nodes[0]) this.gaps = this.measureGaps(nodes[0])
+    this.emit()
+  }
+
+  /**
+   * Resize one object in its own rotated frame: the pointer delta is turned into the object's axes,
+   * the opposite side stays pinned in paper space, and the box keeps turning with the shape.
+   */
+  private resizeOriented(node: SceneNode, handle: string, dx: number, dy: number, constrain: boolean): void {
+    const before = localBounds(node)
+    const cos = Math.cos(-node.rotation)
+    const sin = Math.sin(-node.rotation)
+    const ldx = dx * cos - dy * sin
+    const ldy = dx * sin + dy * cos
+    let w = before.w
+    let h = before.h
+    if (handle.includes('e')) w = before.w + ldx
+    if (handle.includes('w')) w = before.w - ldx
+    if (handle.includes('s')) h = before.h + ldy
+    if (handle.includes('n')) h = before.h - ldy
+    w = Math.max(1, w)
+    h = Math.max(1, h)
+    let sx = before.w > 1e-6 ? w / before.w : 1
+    let sy = before.h > 1e-6 ? h / before.h : 1
+    if (!handle.includes('e') && !handle.includes('w')) sx = 1
+    if (!handle.includes('n') && !handle.includes('s')) sy = 1
+    if (constrain) {
+      const corner = handle.length === 2
+      const uniform = corner ? Math.max(sx, sy) : sx !== 1 ? sx : sy
+      sx = uniform
+      sy = uniform
+    }
+    // The side opposite the handle is the anchor; edge handles anchor on the opposite edge's midpoint.
+    const ax = handle.includes('w') ? before.x + before.w : handle.includes('e') ? before.x : before.x + before.w / 2
+    const ay = handle.includes('n') ? before.y + before.h : handle.includes('s') ? before.y : before.y + before.h / 2
+    const anchorPaper = localToPaper(node, { x: ax, y: ay })
+    scaleLocal(node, sx, sy)
+    const probe = localToPaper({ ...node, x: 0, y: 0 }, { x: ax * sx, y: ay * sy })
+    node.x = anchorPaper.x - probe.x
+    node.y = anchorPaper.y - probe.y
+  }
+
+  /** Resize several objects (or a group) together: scale their union box and keep the layout inside it. */
+  private resizeUnion(nodes: SceneNode[], box: Rect, handle: string, dx: number, dy: number, constrain: boolean): void {
+    let w = box.w
+    let h = box.h
+    if (handle.includes('e')) w = box.w + dx
+    if (handle.includes('w')) w = box.w - dx
+    if (handle.includes('s')) h = box.h + dy
+    if (handle.includes('n')) h = box.h - dy
+    w = Math.max(1, w)
+    h = Math.max(1, h)
+    let sx = box.w > 1e-6 && (handle.includes('e') || handle.includes('w')) ? w / box.w : 1
+    let sy = box.h > 1e-6 && (handle.includes('n') || handle.includes('s')) ? h / box.h : 1
+    if (constrain) {
+      const uniform = handle.length === 2 ? Math.max(sx, sy) : sx !== 1 ? sx : sy
+      sx = uniform
+      sy = uniform
+    }
+    const anchorX = handle.includes('w') ? box.x + box.w : handle.includes('e') ? box.x : box.x + box.w / 2
+    const anchorY = handle.includes('n') ? box.y + box.h : handle.includes('s') ? box.y : box.y + box.h / 2
+    for (const node of nodes) {
+      const before = paperBounds(node)
+      scaleLocal(node, sx, sy)
+      const after = paperBounds(node)
+      node.x += anchorX + (before.x - anchorX) * sx - after.x
+      node.y += anchorY + (before.y - anchorY) * sy - after.y
+    }
   }
 
   /** Smart guides: pull the moving bounds onto nearby edges and centers of other objects. */
@@ -971,40 +1181,6 @@ export class Editor {
       this.smartLines.push({ x1: left, y1: snapY.at, x2: right, y2: snapY.at, label: '' })
     }
     return { dx, dy }
-  }
-
-  private resizeHandle(
-    node: SceneNode,
-    origin: { x: number; y: number; commands: SceneNode['commands'] },
-    handle: string,
-    dx: number,
-    dy: number,
-  ): void {
-    const bounds = commandsBounds(origin.commands)
-    let x = 0
-    let y = 0
-    let w = bounds.w
-    let h = bounds.h
-    if (handle.includes('e')) w = Math.max(1, bounds.w + dx)
-    if (handle.includes('s')) h = Math.max(1, bounds.h + dy)
-    if (handle.includes('w')) {
-      w = Math.max(1, bounds.w - dx)
-      x = dx
-    }
-    if (handle.includes('n')) {
-      h = Math.max(1, bounds.h - dy)
-      y = dy
-    }
-    if (handle === 'rotate') {
-      node.rotation = Math.atan2(dy, dx)
-      return
-    }
-    const sx = bounds.w ? w / bounds.w : 1
-    const sy = bounds.h ? h / bounds.h : 1
-    node.commands = scaleCommands(origin.commands, sx, sy)
-    node.x = origin.x + x
-    node.y = origin.y + y
-    if (node.text) node.text.fieldWidth = Math.max(20, node.text.fieldWidth * sx)
   }
 
   private shapeFromDrag(start: Pt, end: Pt, pointer: PointerInput): SceneNode {
@@ -1098,23 +1274,13 @@ export class Editor {
 
   private hitHandle(paper: Pt, type: PointerInput['type']): string | undefined {
     if (!this.selection.length) return undefined
-    const box = selectionBounds(this.doc, this.selection)
     const tol = this.hitSlop(type) / this.view.zoom
-    const handles: [string, number, number][] = [
-      ['nw', box.x, box.y],
-      ['n', box.x + box.w / 2, box.y],
-      ['ne', box.x + box.w, box.y],
-      ['e', box.x + box.w, box.y + box.h / 2],
-      ['se', box.x + box.w, box.y + box.h],
-      ['s', box.x + box.w / 2, box.y + box.h],
-      ['sw', box.x, box.y + box.h],
-      ['w', box.x, box.y + box.h / 2],
-      ['rotate', box.x + box.w / 2, box.y - 28 / this.view.zoom],
-    ]
-    for (const [name, x, y] of handles) {
-      if (Math.hypot(paper.x - x, paper.y - y) <= tol) return name
+    let best: { name: string; dist: number } | null = null
+    for (const handle of this.handlePositions()) {
+      const dist = Math.hypot(paper.x - handle.x, paper.y - handle.y)
+      if (dist <= tol && (!best || dist < best.dist)) best = { name: handle.name, dist }
     }
-    return undefined
+    return best?.name
   }
 
   private measureGaps(node: SceneNode): GapLine[] {
@@ -2753,9 +2919,19 @@ export class Editor {
   // ---------- numeric fields ----------
 
   /** Bounds of the selection in paper points, for the options bar. */
+  /**
+   * What the X/Y/W/H fields show: the position of the selection's bounding box, and for a single
+   * object its own width and height (so a rotated 5 in × 20 in rectangle still reads 5 in × 20 in).
+   */
   selectionRect(): Rect | null {
     if (!this.selection.length) return null
-    return selectionBounds(this.doc, this.selection)
+    const box = selectionBounds(this.doc, this.selection)
+    const node = this.selection.length === 1 ? this.one() : undefined
+    if (node && node.kind !== 'group' && node.kind !== 'dimension' && node.rotation !== 0) {
+      const local = localBounds(node)
+      return { x: box.x, y: box.y, w: local.w, h: local.h }
+    }
+    return box
   }
 
   setNumber(field: 'width' | 'height' | 'x' | 'y' | 'rotation', raw: string): void {
@@ -2766,13 +2942,18 @@ export class Editor {
         const degrees = Number(String(raw).replace(/[^\d.-]/g, ''))
         if (!Number.isFinite(degrees)) throw new Error('Enter an angle in degrees')
         this.snapshot()
-        for (const node of nodes) node.rotation = (degrees * Math.PI) / 180
+        const target = (degrees * Math.PI) / 180
+        for (const node of nodes) {
+          // Turn about the object's own center; groups turn their children since they carry no angle.
+          const center = localToPaper(node, pivotOf(node))
+          rotateNode(node, node.kind === 'group' ? target : target - node.rotation, center)
+        }
         this.emit()
         return
       }
       const points = this.pointsFor(raw)
       this.snapshot()
-      const union = selectionBounds(this.doc, this.selection)
+      const union = this.selectionRect()!
       if (field === 'x' || field === 'y') {
         const delta = field === 'x' ? points - union.x : points - union.y
         for (const node of nodes) {

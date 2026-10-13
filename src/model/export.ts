@@ -1,6 +1,6 @@
 import { PDFDocument, rgb as pdfRgb } from 'pdf-lib'
 import { cssColor, toRgb } from './color'
-import { commandsBounds, paperBounds } from './geometry'
+import { commandsBounds, paperBounds, pivotOf } from './geometry'
 import type { Doc, SceneNode } from './types'
 import { eachNode } from './factory'
 import { labelAnchor, labelText, placedLabels } from './labels'
@@ -23,6 +23,13 @@ function nodesForExport(doc: Doc, options: ExportOptions): SceneNode[] {
     throw new InputError('Select an object to export')
   }
   return all
+}
+
+/** SVG rotation about the node's pivot, matching the canvas renderer. */
+function svgRotate(node: SceneNode): string {
+  if (!node.rotation) return ''
+  const pivot = pivotOf(node)
+  return ` rotate(${(node.rotation * 180) / Math.PI} ${pivot.x} ${pivot.y})`
 }
 
 function pathD(node: SceneNode): string {
@@ -88,9 +95,9 @@ export function exportSvg(doc: Doc, options: ExportOptions): string {
       }
       if (node.kind === 'text' && node.text) {
         const color = cssColor(node.text.color ?? { space: 'rgb', r: 28, g: 36, b: 48, a: 1 })
-        return `<g transform="translate(${node.x} ${node.y}) rotate(${(node.rotation * 180) / Math.PI})"><text x="0" y="${node.text.fontSize}" font-size="${node.text.fontSize}" font-family="${escape(node.text.fontFamily)}" font-style="${node.text.fontStyle.includes('italic') ? 'italic' : 'normal'}" font-weight="${node.text.fontStyle.includes('bold') ? 'bold' : 'normal'}" fill="${color}">${escape(node.text.content)}</text>${labels}</g>`
+        return `<g transform="translate(${node.x} ${node.y})${svgRotate(node)}"><text x="0" y="${node.text.fontSize}" font-size="${node.text.fontSize}" font-family="${escape(node.text.fontFamily)}" font-style="${node.text.fontStyle.includes('italic') ? 'italic' : 'normal'}" font-weight="${node.text.fontStyle.includes('bold') ? 'bold' : 'normal'}" fill="${color}">${escape(node.text.content)}</text>${labels}</g>`
       }
-      return `<g transform="translate(${node.x} ${node.y}) rotate(${(node.rotation * 180) / Math.PI})" opacity="${node.opacity}"><path d="${pathD(node)}" fill="${fillCss}" stroke="${strokeCss}" stroke-width="${sw}"${dash}/>${labels}</g>`
+      return `<g transform="translate(${node.x} ${node.y})${svgRotate(node)}" opacity="${node.opacity}"><path d="${pathD(node)}" fill="${fillCss}" stroke="${strokeCss}" stroke-width="${sw}"${dash}/>${labels}</g>`
     })
     .join('')
   const background =

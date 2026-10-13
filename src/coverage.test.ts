@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { CATALOG, LIBRARIES, loadCatalog, searchCatalog } from './catalog/catalog'
 import { Editor } from './editor/editor'
 import { exportSvg, importPsd, looksLikePsd } from './model/export'
-import { commandsBounds, paperBounds } from './model/geometry'
+import { commandsBounds, localBounds, paperBounds } from './model/geometry'
 import { makeRect } from './model/factory'
 import {
   paperPointsToWorldInches,
@@ -998,9 +998,12 @@ Object.assign(cases, {
     app.transform({ shearX: -Math.PI / 6 })
     expect(app.selectionRect()!.w).toBeCloseTo(200)
     app.transform({ rotate: Math.PI / 2, origin: 'c' })
-    const turned = app.selectionRect()!
+    const turned = paperBounds(node)
     expect(turned.w).toBeCloseTo(100)
     expect(turned.h).toBeCloseTo(200)
+    // The W/H fields keep reporting the object's own size while it is turned.
+    expect(app.selectionRect()!.w).toBeCloseTo(200)
+    expect(app.selectionRect()!.h).toBeCloseTo(100)
     // Copy makes a duplicate and remembers the step for Smart Duplicate.
     const count = app.doc.layers[0].children.length
     app.transform({ dx: 30 }, { copy: true })
@@ -1419,6 +1422,142 @@ Object.assign(cases, {
     expect(app.selection).toHaveLength(2)
     expect(app.doc.layers[0].children.every((item) => item.kind === 'path')).toBe(true)
     expect(SHORTCUTS.some((item) => item.reserved)).toBe(true)
+  },
+  'handle-resize-anchored'() {
+    const app = editor()
+    // A curved library symbol: control points reach outside the drawn shape, which used to skew the math.
+    const id = app.placeSymbol('floor-plan-svg-singledoor', 100, 100)
+    const node = app.doc.layers[0].children.find((item) => item.id === id)!
+    app.selection = [id]
+    const before = paperBounds(node)
+    // Drag the south-east handle 40 right and 30 down: the north-west corner must not move.
+    app.pointerDown(pointer(before.x + before.w, before.y + before.h))
+    app.pointerMove(pointer(before.x + before.w + 40, before.y + before.h + 30))
+    app.pointerUp(pointer(before.x + before.w + 40, before.y + before.h + 30))
+    const after = paperBounds(node)
+    expect(after.x).toBeCloseTo(before.x, 1)
+    expect(after.y).toBeCloseTo(before.y, 1)
+    expect(after.w).toBeCloseTo(before.w + 40, 1)
+    expect(after.h).toBeCloseTo(before.h + 30, 1)
+    // The west edge handle pins the east edge.
+    app.pointerDown(pointer(after.x, after.y + after.h / 2))
+    app.pointerMove(pointer(after.x - 20, after.y + after.h / 2))
+    app.pointerUp(pointer(after.x - 20, after.y + after.h / 2))
+    const widened = paperBounds(node)
+    expect(widened.x + widened.w).toBeCloseTo(after.x + after.w, 1)
+    expect(widened.w).toBeCloseTo(after.w + 20, 1)
+    expect(widened.h).toBeCloseTo(after.h, 1)
+    // Shift keeps the proportions on a corner handle.
+    app.pointerDown(pointer(widened.x + widened.w, widened.y + widened.h, { shift: true }))
+    app.pointerMove(pointer(widened.x + widened.w + 50, widened.y + widened.h, { shift: true }))
+    app.pointerUp(pointer(widened.x + widened.w + 50, widened.y + widened.h, { shift: true }))
+    const proportional = paperBounds(node)
+    expect(proportional.w / proportional.h).toBeCloseTo(widened.w / widened.h, 2)
+  },
+  'rotate-handle-centered'() {
+    const app = editor()
+    const node = makeRect(100, 100, 200, 100)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    const center = { x: 200, y: 150 }
+    const knob = app.handlePositions().find((handle) => handle.name === 'rotate')!
+    expect(knob.x).toBeCloseTo(200)
+    expect(knob.y).toBeCloseTo(100 - 28)
+    // Drag the knob a quarter turn clockwise around the center: the shape turns 90° in place.
+    app.pointerDown(pointer(knob.x, knob.y))
+    app.pointerMove(pointer(center.x + 100, center.y))
+    expect(app.readout).toMatch(/90°/)
+    app.pointerUp(pointer(center.x + 100, center.y))
+    expect(node.rotation).toBeCloseTo(Math.PI / 2)
+    const turned = paperBounds(node)
+    expect(turned.x + turned.w / 2).toBeCloseTo(center.x)
+    expect(turned.y + turned.h / 2).toBeCloseTo(center.y)
+    expect(turned.w).toBeCloseTo(100)
+    expect(turned.h).toBeCloseTo(200)
+    // The frame turns with the shape instead of staying an upright box.
+    const frame = app.selectionFrame()!
+    expect(frame.angle).toBeCloseTo(Math.PI / 2)
+    const [nw, ne] = frame.corners
+    expect(Math.hypot(ne.x - nw.x, ne.y - nw.y)).toBeCloseTo(200)
+    expect(Math.abs(ne.x - nw.x)).toBeLessThan(1e-6)
+    // Hit-testing agrees with what is drawn: the far corner of the turned shape is inside it.
+    expect(app.hit({ x: 245, y: 245 }, pointer(245, 245))?.id).toBe(node.id)
+    expect(app.hit({ x: 295, y: 145 }, pointer(295, 145))).toBeFalsy()
+    // Shift snaps the knob to 15° steps.
+    app.pointerDown(pointer(app.handlePositions().find((handle) => handle.name === 'rotate')!.x, app.handlePositions().find((handle) => handle.name === 'rotate')!.y, { shift: true }))
+    app.pointerMove(pointer(center.x + 100, center.y + 20, { shift: true }))
+    app.pointerUp(pointer(center.x + 100, center.y + 20, { shift: true }))
+    const degrees = (node.rotation * 180) / Math.PI
+    expect(Math.abs(degrees / 15 - Math.round(degrees / 15))).toBeLessThan(1e-6)
+  },
+  'rotated-resize-stays-put'() {
+    const app = editor()
+    const node = makeRect(100, 100, 200, 100)
+    node.rotation = Math.PI / 6
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    const handles = app.handlePositions()
+    const se = handles.find((handle) => handle.name === 'se')!
+    const nw = handles.find((handle) => handle.name === 'nw')!
+    // Pull the south-east corner outward along the shape's own x axis.
+    const dx = Math.cos(Math.PI / 6) * 60
+    const dy = Math.sin(Math.PI / 6) * 60
+    app.pointerDown(pointer(se.x, se.y))
+    app.pointerMove(pointer(se.x + dx, se.y + dy))
+    app.pointerUp(pointer(se.x + dx, se.y + dy))
+    const local = localBounds(node)
+    expect(local.w).toBeCloseTo(260, 1)
+    expect(local.h).toBeCloseTo(100, 1)
+    expect(node.rotation).toBeCloseTo(Math.PI / 6)
+    const nwAfter = app.handlePositions().find((handle) => handle.name === 'nw')!
+    expect(nwAfter.x).toBeCloseTo(nw.x, 1)
+    expect(nwAfter.y).toBeCloseTo(nw.y, 1)
+    // Typing a width edits the object's own width, and the field shows it.
+    app.setNumber('width', '2 in')
+    expect(localBounds(node).w).toBeCloseTo(144)
+    expect(app.selectionRect()!.w).toBeCloseTo(144)
+    // SVG export turns about the same pivot the canvas uses.
+    expect(app.exportSvg()).toMatch(/rotate\((29\.9\d*|30(\.0\d*)?) [\d.]+ [\d.]+\)/)
+  },
+  'group-bounds-resize'() {
+    const app = editor()
+    const a = makeRect(0, 0, 50, 50)
+    const b = makeRect(150, 50, 50, 50)
+    app.doc.layers[0].children.push(a, b)
+    app.selection = [a.id, b.id]
+    app.group()
+    const group = app.one()!
+    expect(group.kind).toBe('group')
+    expect(paperBounds(group)).toMatchObject({ x: 0, y: 0, w: 200, h: 100 })
+    expect(app.hit({ x: 175, y: 75 }, pointer(175, 75))?.id).toBe(group.id)
+    // Scale the whole group from its south-east handle: children keep their layout.
+    app.pointerDown(pointer(200, 100))
+    app.pointerMove(pointer(400, 200))
+    app.pointerUp(pointer(400, 200))
+    expect(paperBounds(group)).toMatchObject({ x: 0, y: 0, w: 400, h: 200 })
+    const [left, right] = group.children
+    expect(paperBounds({ ...right, x: right.x + group.x, y: right.y + group.y })).toMatchObject({ x: 300, y: 100, w: 100, h: 100 })
+    expect(commandsBounds(left.commands).w).toBeCloseTo(100)
+    // Rotating a group turns its children about the group center.
+    app.setNumber('rotation', '90')
+    const turned = paperBounds(group)
+    expect(turned.x + turned.w / 2).toBeCloseTo(200)
+    expect(turned.y + turned.h / 2).toBeCloseTo(100)
+    expect(turned.w).toBeCloseTo(200)
+    expect(turned.h).toBeCloseTo(400)
+    expect(group.children[0].rotation).toBeCloseTo(Math.PI / 2)
+  },
+  'multi-resize-layout'() {
+    const app = editor()
+    const a = makeRect(0, 0, 50, 50)
+    const b = makeRect(150, 50, 50, 50)
+    app.doc.layers[0].children.push(a, b)
+    app.selection = [a.id, b.id]
+    app.pointerDown(pointer(200, 100))
+    app.pointerMove(pointer(300, 100))
+    app.pointerUp(pointer(300, 100))
+    expect(paperBounds(a)).toMatchObject({ x: 0, y: 0, w: 75, h: 50 })
+    expect(paperBounds(b)).toMatchObject({ x: 225, y: 50, w: 75, h: 50 })
   },
   'dimension-move'() {
     const app = editor()

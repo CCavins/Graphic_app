@@ -1,5 +1,5 @@
 import { outlineStroke } from './boolean'
-import { cmd, commandsBounds, distToSegment, localToPaper, paperBounds, paperToLocal, sampleCommands, unionBounds } from './geometry'
+import { cmd, distToSegment, localToPaper, paperBounds, paperToLocal, pivotOf, sampleCommands, unionBounds } from './geometry'
 import type { Cmd, Doc, Pt, Rect, SceneNode, TransformOrigin, TransformStep } from './types'
 import { InputError } from './units'
 
@@ -31,8 +31,7 @@ function mapCommands(commands: Cmd[], fn: (x: number, y: number) => Pt): Cmd[] {
 }
 
 function nodeCenter(node: SceneNode): Pt {
-  const b = commandsBounds(node.commands)
-  return localToPaper(node, { x: b.x + b.w / 2, y: b.y + b.h / 2 })
+  return localToPaper(node, pivotOf(node))
 }
 
 /**
@@ -61,24 +60,12 @@ export function transformNodes(nodes: SceneNode[], step: TransformStep, scaleSty
       continue
     }
     if (step.scaleX !== 1 || step.scaleY !== 1) {
-      node.commands = mapCommands(node.commands, (x, y) => ({ x: x * step.scaleX, y: y * step.scaleY }))
-      node.x = origin.x + (node.x - origin.x) * step.scaleX
-      node.y = origin.y + (node.y - origin.y) * step.scaleY
-      if (node.text) {
-        node.text.fontSize *= Math.max(step.scaleX, step.scaleY)
-        node.text.fieldWidth *= step.scaleX
-      }
-      if (scaleStyles) {
-        for (const attr of node.appearance) {
-          if (attr.kind === 'stroke') attr.width *= Math.max(step.scaleX, step.scaleY)
-          if (attr.kind !== 'fill' && attr.kind !== 'stroke') {
-            attr.blur *= Math.max(step.scaleX, step.scaleY)
-            attr.dx *= step.scaleX
-            attr.dy *= step.scaleY
-          }
-        }
-      }
-      for (const child of node.children) transformNodes([child], { ...IDENTITY_STEP, scaleX: step.scaleX, scaleY: step.scaleY, origin: 'nw' }, scaleStyles)
+      const before = nodeCenter(node)
+      scaleLocal(node, step.scaleX, step.scaleY, scaleStyles)
+      const after = nodeCenter(node)
+      // The node's center scales about the origin like every other point.
+      node.x += origin.x + (before.x - origin.x) * step.scaleX - after.x
+      node.y += origin.y + (before.y - origin.y) * step.scaleY - after.y
     }
     if (step.shearX !== 0 || step.shearY !== 0) {
       const tx = Math.tan(step.shearX)
@@ -87,16 +74,64 @@ export function transformNodes(nodes: SceneNode[], step: TransformStep, scaleSty
       node.x += (node.y - origin.y) * tx
       node.y += (node.x - origin.x) * ty
     }
-    if (step.rotate !== 0) {
-      const before = nodeCenter(node)
-      const after = rotatePoint(before, origin, step.rotate)
-      node.x += after.x - before.x
-      node.y += after.y - before.y
-      node.rotation += step.rotate
-    }
+    if (step.rotate !== 0) rotateNode(node, step.rotate, origin)
     node.x += step.dx
     node.y += step.dy
   }
+}
+
+/** Scale a node in its own coordinate space about its local (0, 0); groups scale their children with them. */
+export function scaleLocal(node: SceneNode, sx: number, sy: number, scaleStyles = false): void {
+  const max = Math.max(sx, sy)
+  node.commands = mapCommands(node.commands, (x, y) => ({ x: x * sx, y: y * sy }))
+  if (node.text) {
+    node.text.fontSize *= max
+    node.text.fieldWidth *= sx
+  }
+  if (node.dimension) {
+    const d = node.dimension
+    node.dimension = { ...d, x1: d.x1 * sx, y1: d.y1 * sy, x2: d.x2 * sx, y2: d.y2 * sy }
+  }
+  if (scaleStyles) {
+    for (const attr of node.appearance) {
+      if (attr.kind === 'stroke') attr.width *= max
+      if (attr.kind !== 'fill' && attr.kind !== 'stroke') {
+        attr.blur *= max
+        attr.dx *= sx
+        attr.dy *= sy
+      }
+    }
+  }
+  for (const child of node.children) {
+    child.x *= sx
+    child.y *= sy
+    scaleLocal(child, sx, sy, scaleStyles)
+  }
+}
+
+/**
+ * Rotate a node about a point in its parent's coordinate space.
+ * Groups have no rotation of their own: their children turn about the group's center instead.
+ */
+export function rotateNode(node: SceneNode, angle: number, about: Pt): void {
+  const before = nodeCenter(node)
+  const after = rotatePoint(before, about, angle)
+  node.x += after.x - before.x
+  node.y += after.y - before.y
+  if (node.kind === 'group') {
+    const pivot = pivotOf(node)
+    for (const child of node.children) rotateNode(child, angle, pivot)
+    return
+  }
+  if (node.dimension) {
+    const d = node.dimension
+    const center = { x: (d.x1 + d.x2) / 2, y: (d.y1 + d.y2) / 2 }
+    const a = rotatePoint({ x: d.x1, y: d.y1 }, center, angle)
+    const b = rotatePoint({ x: d.x2, y: d.y2 }, center, angle)
+    node.dimension = { ...d, x1: a.x, y1: a.y, x2: b.x, y2: b.y }
+    return
+  }
+  node.rotation += angle
 }
 
 /** Nodes whose paper bounds touch (or sit fully inside) a marquee rectangle. */

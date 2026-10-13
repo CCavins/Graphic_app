@@ -1,5 +1,5 @@
-import { commandsBounds, sampleCommands, textFrame } from './geometry'
-import type { CanvasSettings, LabelKind, LabelLocation, ObjectLabel, Rect, SceneNode } from './types'
+import { localBounds, sampleCommands } from './geometry'
+import type { CanvasSettings, LabelKind, LabelLocation, ObjectLabel, SceneNode } from './types'
 import { formatArea, formatWorldLength, paperPointsToWorldInches } from './units'
 
 export const DEFAULT_LOCATION: Record<LabelKind, LabelLocation> = {
@@ -30,16 +30,7 @@ export function makeLabel(kind: LabelKind, canvas: CanvasSettings, text = ''): O
   }
 }
 
-/** Bounds in the node's own coordinate space (before its rotation and position). */
-export function localBounds(node: SceneNode): Rect {
-  const frame = textFrame(node)
-  if (frame) return { x: 0, y: 0, w: frame.w, h: frame.h }
-  if (node.dimension) {
-    const d = node.dimension
-    return { x: Math.min(d.x1, d.x2), y: Math.min(d.y1, d.y2), w: Math.abs(d.x2 - d.x1), h: Math.abs(d.y2 - d.y1) }
-  }
-  return commandsBounds(node.commands)
-}
+export { localBounds }
 
 export function pathLength(node: SceneNode): number {
   if (node.dimension) return Math.hypot(node.dimension.x2 - node.dimension.x1, node.dimension.y2 - node.dimension.y1)
