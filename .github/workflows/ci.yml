@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+      - run: cp dist/index.html dist/404.html
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npx playwright test
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          path: dist
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.deployment.outputs.page_url }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  live:
+    needs: deploy
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Wait for the published commit
+        env:
+          SHA: ${{ github.sha }}
+          PAGE_URL: ${{ needs.deploy.outputs.url }}
+        run: |
+          base="${PAGE_URL%/}/"
+          echo "BASE_URL=$base" >> "$GITHUB_ENV"
+          url="${base}version.json"
+          echo "polling $url"
+          for i in $(seq 1 36); do
+            body=$(curl -fsS "$url" || true)
+            echo "$body"
+            if echo "$body" | grep -q "$SHA"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "live site did not publish $SHA"
+          exit 1
+      - run: npx playwright test
+        env:
+          BASE_URL: ${{ env.BASE_URL }}

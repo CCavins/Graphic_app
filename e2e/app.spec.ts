@@ -1,0 +1,133 @@
+import { expect, test, type Page } from '@playwright/test'
+
+async function drawRect(page: Page) {
+  await page.getByTestId('tool-rect').click()
+  const canvas = page.getByTestId('canvas')
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('canvas missing')
+  await page.mouse.move(box.x + 80, box.y + 90)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 220, box.y + 180, { steps: 5 })
+  await expect(page.getByTestId('readout')).not.toHaveText('')
+  await page.mouse.up()
+}
+
+test('draw-rect live size and dimension', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  const count = await page.evaluate(() => window.__measured!.editor.doc.layers[0].children.length)
+  expect(count).toBe(1)
+  await page.getByTestId('tool-line').click()
+  await page.evaluate(() => {
+    window.__measured!.editor.lineMode = 'dimension'
+  })
+  const canvas = page.getByTestId('canvas')
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('canvas missing')
+  await page.mouse.move(box.x + 100, box.y + 220)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 260, box.y + 220, { steps: 4 })
+  await page.mouse.up()
+  const kinds = await page.evaluate(() => window.__measured!.editor.doc.layers[0].children.map((node) => node.kind))
+  expect(kinds).toContain('dimension')
+})
+
+test('wheel pan and pinch zoom', async ({ page }) => {
+  await page.goto('./')
+  const before = await page.evaluate(() => ({ ...window.__measured!.editor.view }))
+  await page.getByTestId('canvas').hover()
+  await page.mouse.wheel(30, 20)
+  const panned = await page.evaluate(() => window.__measured!.editor.view.panX)
+  expect(panned).toBeLessThan(before.panX)
+  await page.keyboard.down('Control')
+  await page.mouse.wheel(0, -80)
+  await page.keyboard.up('Control')
+  const zoom = await page.evaluate(() => window.__measured!.editor.view.zoom)
+  expect(zoom).toBeGreaterThan(before.zoom)
+})
+
+test('library search stays virtualized', async ({ page }) => {
+  await page.goto('./')
+  await page.getByTestId('tab-Libraries').click()
+  await expect(page.getByTestId('catalog-count')).toContainText(/\d/)
+  const count = await page.getByTestId('symbol-item').count()
+  expect(count).toBeLessThan(30)
+  expect(count).toBeGreaterThan(0)
+  await page.getByTestId('library-search').fill('65 in TV')
+  await expect(page.getByTestId('symbol-item').first()).toContainText('65')
+})
+
+test('corrupt file keeps the document', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  await page.getByTestId('file-input').setInputFiles({
+    name: 'broken.measured',
+    mimeType: 'application/json',
+    buffer: Buffer.from('{'),
+  })
+  await expect(page.getByTestId('banner')).toContainText(/not a Measured/)
+  const count = await page.evaluate(() => window.__measured!.editor.doc.layers[0].children.length)
+  expect(count).toBe(1)
+})
+
+test('two-finger gesture does not create a shape', async ({ page }) => {
+  await page.goto('./')
+  await page.getByTestId('tool-rect').click()
+  await page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid=canvas]') as HTMLCanvasElement
+    const rect = canvas.getBoundingClientRect()
+    const fire = (type: string, id: number, x: number, y: number) => {
+      canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: id,
+        pointerType: 'touch',
+        clientX: rect.left + x,
+        clientY: rect.top + y,
+        button: 0,
+        buttons: type === 'pointerup' ? 0 : 1,
+      }))
+    }
+    fire('pointerdown', 1, 40, 40)
+    fire('pointerdown', 2, 70, 50)
+    fire('pointermove', 1, 160, 120)
+    fire('pointerup', 1, 160, 120)
+    fire('pointerup', 2, 70, 50)
+  })
+  const count = await page.evaluate(() => window.__measured!.editor.doc.layers[0].children.length)
+  expect(count).toBe(0)
+})
+
+test('pointer-move performance in outline mode', async ({ page }) => {
+  await page.goto('./')
+  await page.evaluate(() => {
+    performance.clearMeasures('pointer-move')
+    window.__measured!.editor.doc.canvas.viewMode = 'outline'
+    window.__measured!.seed(1000)
+  })
+  const canvas = page.getByTestId('canvas')
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('canvas missing')
+  await page.mouse.move(box.x + 30, box.y + 40)
+  await page.mouse.down()
+  for (let i = 0; i < 8; i++) await page.mouse.move(box.x + 40 + i * 12, box.y + 50)
+  await page.mouse.up()
+  const durations = await page.evaluate(() => window.__measured!.frames())
+  const sorted = [...durations].sort((a, b) => a - b)
+  const median = sorted[Math.floor(sorted.length / 2)] ?? 0
+  expect(median).toBeLessThan(32)
+})
+
+test('export svg from the dialog', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  await page.getByTestId('export-open').click()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('export-confirm').click(),
+  ])
+  expect(download.suggestedFilename()).toContain('.svg')
+  const path = await download.path()
+  const { readFileSync } = await import('node:fs')
+  expect(readFileSync(path!, 'utf8')).toContain('<svg')
+})

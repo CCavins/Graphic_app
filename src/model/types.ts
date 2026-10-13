@@ -1,0 +1,293 @@
+export type ID = string
+
+export type BaseUnit = 'px' | 'in' | 'cm' | 'mm'
+export type LabelUnit = 'px' | 'in' | 'ft' | 'ft-in' | 'yd' | 'mi' | 'mm' | 'cm' | 'm' | 'km'
+
+export interface RGB {
+  space: 'rgb'
+  r: number
+  g: number
+  b: number
+  a: number
+}
+
+export interface CMYK {
+  space: 'cmyk'
+  c: number
+  m: number
+  y: number
+  k: number
+  a: number
+}
+
+export type Color = RGB | CMYK
+
+export interface Gradient {
+  kind: 'linear' | 'radial' | 'angle'
+  stops: { offset: number; color: Color }[]
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+export interface Brush {
+  diameter: number
+  angle: number
+  roundness: number
+  minWidth: number
+}
+
+export const BLEND_MODES = [
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'color-burn',
+  'hard-light',
+  'soft-light',
+  'difference',
+  'exclusion',
+  'hue',
+  'saturation',
+  'color',
+  'luminosity',
+  'linear-burn',
+  'linear-dodge',
+  'vivid-light',
+  'linear-light',
+  'pin-light',
+  'darker-color',
+  'lighter-color',
+] as const
+
+export type BlendMode = (typeof BLEND_MODES)[number]
+
+export const APPROXIMATE_BLEND = new Set<BlendMode>([
+  'linear-burn',
+  'linear-dodge',
+  'vivid-light',
+  'linear-light',
+  'pin-light',
+  'darker-color',
+  'lighter-color',
+])
+
+export type EffectKind = 'dropShadow' | 'innerShadow' | 'outerGlow' | 'innerGlow' | 'blur'
+
+export interface FillAttr {
+  id: ID
+  kind: 'fill'
+  enabled: boolean
+  color: Color
+  opacity: number
+  gradient?: Gradient
+  patternId?: string
+  imageId?: string
+}
+
+export interface StrokeAttr {
+  id: ID
+  kind: 'stroke'
+  enabled: boolean
+  color: Color
+  opacity: number
+  width: number
+  align: 'center' | 'inner' | 'outer'
+  dash: number[]
+  arrows: 'none' | 'start' | 'end' | 'both'
+  brush?: Brush
+}
+
+export interface EffectAttr {
+  id: ID
+  kind: EffectKind
+  enabled: boolean
+  color: Color
+  opacity: number
+  blur: number
+  dx: number
+  dy: number
+}
+
+export type AppearanceItem = FillAttr | StrokeAttr | EffectAttr
+
+export interface Cmd {
+  c: 'M' | 'L' | 'C' | 'Z'
+  x: number
+  y: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+export interface Precision {
+  mode: 'decimal' | 'fraction'
+  decimals: number
+  denominator: 2 | 4 | 8 | 16 | 32
+  trimZeros: boolean
+}
+
+export interface ObjectLabel {
+  kind: 'length' | 'width' | 'height' | 'area' | 'text'
+  text: string
+  offset: number
+  align: 'horizontal' | 'vertical' | 'parallel' | 'perpendicular' | 'centered'
+  showUnits: boolean
+  precision: Precision
+}
+
+export interface DimensionData {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  offset: number
+}
+
+export interface TextData {
+  content: string
+  fontFamily: string
+  fontStyle: string
+  fontSize: number
+  align: 'left' | 'center' | 'right' | 'justify'
+  lineSpacing: number
+  charSpacing: number
+  mode: 'box' | 'field'
+  fieldWidth: number
+  onPath: boolean
+  path: Cmd[]
+  pathOffset: number
+}
+
+export interface SceneNode {
+  id: ID
+  name: string
+  kind: 'path' | 'text' | 'image' | 'group' | 'dimension'
+  x: number
+  y: number
+  rotation: number
+  visible: boolean
+  locked: boolean
+  opacity: number
+  blendMode: BlendMode
+  commands: Cmd[]
+  children: SceneNode[]
+  clip: boolean
+  appearance: AppearanceItem[]
+  label?: ObjectLabel
+  dimension?: DimensionData
+  text?: TextData
+  imageId?: string
+  imageWidth?: number
+  imageHeight?: number
+  symbolId?: string
+  paintError?: boolean
+  pressures?: number[]
+}
+
+export interface Layer {
+  id: ID
+  name: string
+  visible: boolean
+  locked: boolean
+  opacity: number
+  blendMode: BlendMode
+  children: SceneNode[]
+}
+
+export interface Guide {
+  id: ID
+  axis: 'h' | 'v'
+  at: number
+}
+
+export interface GridSettings {
+  show: boolean
+  snap: boolean
+  snapPoints: boolean
+  spacingX: number
+  spacingY: number
+  subdivisions: number
+  margins: { top: number; right: number; bottom: number; left: number }
+  extend: boolean
+  originFromMargin: boolean
+}
+
+export interface CanvasSettings {
+  width: number
+  height: number
+  baseUnit: BaseUnit
+  /** World inches represented by one paper point. */
+  realInchesPerPoint: number
+  labelUnit: LabelUnit
+  precision: Precision
+  showUnits: boolean
+  background: Color
+  grid: GridSettings
+  pixelAlignStrokes: boolean
+  selectionColor: string
+  colorPicker: 'popup' | 'panel'
+  viewMode: 'vector' | 'pixels' | 'outline'
+}
+
+export interface SavedStyle {
+  id: ID
+  name: string
+  appearance: AppearanceItem[]
+}
+
+export interface PatternDef {
+  id: ID
+  name: string
+}
+
+export interface Doc {
+  id: ID
+  name: string
+  canvas: CanvasSettings
+  layers: Layer[]
+  activeLayerId: ID
+  guides: Guide[]
+  styles: SavedStyle[]
+  patterns: PatternDef[]
+  images: Record<string, string>
+}
+
+export interface MeasuredFile {
+  version: 1
+  document: Doc
+}
+
+export interface Pt {
+  x: number
+  y: number
+}
+
+export interface Rect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export const MAX_CANVAS = 16000
+export const APPEARANCE_CAP = 12
+export const HISTORY_CAP = 200
+export const MIN_ZOOM = 0.1
+export const MAX_ZOOM = 64
+export const PT_PER_IN = 72
+
+let seq = 0
+export function uid(prefix = 'n'): ID {
+  seq += 1
+  return `${prefix}${seq.toString(36)}`
+}
+
+export function resetIds(start = 0): void {
+  seq = start
+}
