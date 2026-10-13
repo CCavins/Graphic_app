@@ -105,6 +105,19 @@ canvas {
   cursor: crosshair;
 }
 
+.text-editor {
+  position: absolute;
+  z-index: 4;
+  margin: 0;
+  padding: 2px 4px;
+  border: 1px solid #1d4e89;
+  border-radius: 2px;
+  background: white;
+  color: #1c2430;
+  resize: none;
+  line-height: 1.2;
+}
+
 .readout, .menu {
   position: absolute;
   pointer-events: none;

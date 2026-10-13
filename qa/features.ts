@@ -97,6 +97,7 @@ export const features: FeatureRow[] = [
   { id: 'smooth-pencil' },
   { id: 'smooth-pen' },
   { id: 'tools-follow-cursor' },
+  { id: 'edit-existing-text' },
   { id: 'search-perf' },
   { id: 'seed-perf' },
   { id: 'svg-export-perf' },

@@ -721,6 +721,24 @@ export const cases: Record<string, () => void> = {
     expect(node.commands.some((command) => command.c === 'C')).toBe(true)
     expect(node.commands[node.commands.length - 1].x).toBeCloseTo(100)
   },
+  'edit-existing-text'() {
+    const app = editor()
+    app.setTool('text')
+    app.pointerDown(pointer(40, 40))
+    app.pointerUp(pointer(40, 40))
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    const id = app.editingTextId
+    expect(id).toBe(app.doc.layers[0].children[0].id)
+    app.setTextContent('Hello')
+    app.pointerDown(pointer(50, 48))
+    app.pointerUp(pointer(50, 48))
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    expect(app.editingTextId).toBe(id)
+    expect(app.doc.layers[0].children[0].text?.content).toBe('Hello')
+    app.pointerDown(pointer(400, 400))
+    app.pointerUp(pointer(400, 400))
+    expect(app.doc.layers[0].children).toHaveLength(2)
+  },
   'tools-follow-cursor'() {
     for (const tool of ['rect', 'roundRect', 'ellipse', 'line'] as const) {
       const app = editor()

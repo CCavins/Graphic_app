@@ -157,7 +157,10 @@ export class Editor {
   spaceDown = false
   context: { x: number; y: number } | null = null
   loupe = false
+  editingTextId: string | null = null
   lastPointer: PointerInput | null = null
+  private textUndoArmed = false
+  private lastTextClick = { time: 0, id: '' }
   customLibrary: CatalogItem[] = []
   plugins: { id: string; name: string; code: string }[] = []
   clipboard: AppearanceItem[] | null = null
@@ -271,6 +274,8 @@ export class Editor {
     this.pen = []
     this.stroke = []
     this.strokePressure = []
+    this.editingTextId = null
+    this.textUndoArmed = false
     this.emit()
   }
 
@@ -358,7 +363,16 @@ export class Editor {
       this.drag = { kind: 'pan', start: { x: pointer.cx, y: pointer.cy }, origin: { x: this.view.panX, y: this.view.panY }, ids: [], origins: [], moved: false, pointerId: pointer.pointerId }
       return
     }
-    const paper = this.snapped(this.toPaper(pointer), pointer)
+    const raw = this.toPaper(pointer)
+    if (this.tool === 'text') {
+      const textHit = this.hit(raw, pointer, true)
+      if (textHit?.kind === 'text') {
+        this.editText(textHit.id)
+        return
+      }
+      this.stopTextEdit()
+    }
+    const paper = this.snapped(raw, pointer)
     if (this.tool === 'select' || this.tool === 'pathSelect') {
       const handle = this.hitHandle(paper, pointer.type)
       if (handle && this.selection.length) {
@@ -377,6 +391,15 @@ export class Editor {
         return
       }
       const hit = this.hit(paper, pointer)
+      if (hit?.kind === 'text' && this.tool === 'select') {
+        const now = Date.now()
+        if (this.lastTextClick.id === hit.id && now - this.lastTextClick.time < 500) {
+          this.editText(hit.id)
+          this.lastTextClick = { time: 0, id: '' }
+          return
+        }
+        this.lastTextClick = { time: now, id: hit.id }
+      }
       if (hit) {
         if (pointer.shift) {
           this.selection = this.selection.includes(hit.id) ? this.selection.filter((id) => id !== hit.id) : [...this.selection, hit.id]
@@ -498,6 +521,9 @@ export class Editor {
       if (distance >= threshold) {
         drag.moved = true
         this.preview = this.shapeFromDrag(drag.start, paper, pointer)
+      } else if (this.tool === 'text') {
+        drag.moved = true
+        this.preview = this.shapeFromDrag(drag.start, drag.start, pointer)
       }
     }
     if (drag.kind === 'create') {
@@ -509,6 +535,7 @@ export class Editor {
       }
       this.snapshot()
       this.addNode(this.preview)
+      if (this.tool === 'text') this.editText(this.selection[0])
       this.preview = null
       this.pen = []
     }
@@ -705,7 +732,7 @@ export class Editor {
     return makeRect(x, y, w, h)
   }
 
-  private hit(paper: Pt, pointer: PointerInput): SceneNode | undefined {
+  private hit(paper: Pt, pointer: PointerInput, anyLayer = false): SceneNode | undefined {
     const tol = this.hitSlop(pointer.type) / this.view.zoom
     const visit = (nodes: SceneNode[], ox: number, oy: number): SceneNode | undefined => {
       for (let i = nodes.length - 1; i >= 0; i--) {
@@ -723,7 +750,7 @@ export class Editor {
     for (let i = this.doc.layers.length - 1; i >= 0; i--) {
       const layer = this.doc.layers[i]
       if (!layer.visible || layer.locked) continue
-      if (!pointer.meta && layer.id !== this.doc.activeLayerId) continue
+      if (!anyLayer && !pointer.meta && layer.id !== this.doc.activeLayerId) continue
       const found = visit(layer.children, 0, 0)
       if (found) return found
     }
@@ -1123,10 +1150,30 @@ export class Editor {
   }
 
   setTextContent(content: string): void {
-    const node = this.one()
+    const node = findNode(this.doc, this.editingTextId ?? this.selection[0] ?? '')
     if (!node?.text) return
-    this.snapshot()
+    if (!this.textUndoArmed) {
+      this.snapshot()
+      this.textUndoArmed = true
+    }
     node.text.content = content
+    this.emit()
+  }
+
+  editText(id: string): void {
+    const node = findNode(this.doc, id)
+    if (!node?.text) return
+    this.selection = [id]
+    this.editingTextId = id
+    this.textUndoArmed = false
+    this.drag = null
+    this.emit()
+  }
+
+  stopTextEdit(): void {
+    if (!this.editingTextId && !this.textUndoArmed) return
+    this.editingTextId = null
+    this.textUndoArmed = false
     this.emit()
   }
 

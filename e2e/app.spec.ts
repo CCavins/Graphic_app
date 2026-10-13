@@ -57,6 +57,43 @@ test('snap is optional and corners follow the cursor', async ({ page }) => {
   await expect(page.getByTestId('active-tool')).toHaveText('Rect')
 })
 
+test('text tool edits an existing text box', async ({ page }) => {
+  await page.goto('./')
+  await page.getByTestId('tool-text').click()
+  const canvas = page.getByTestId('canvas')
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('canvas missing')
+  await page.mouse.click(box.x + 120, box.y + 140)
+  const editorBox = page.getByTestId('text-editor')
+  await expect(editorBox).toBeVisible()
+  await editorBox.fill('Room label')
+  await page.keyboard.press('Escape')
+  await expect(editorBox).toBeHidden()
+  const point = await page.evaluate(() => {
+    const current = window.__measured!.editor
+    const node = current.doc.layers[0].children[0]
+    const client = current.toClient({ x: node.x + 6, y: node.y + 6 })
+    const canvas = document.querySelector('[data-testid=canvas]')!.getBoundingClientRect()
+    const x = canvas.left + client.x
+    const y = canvas.top + client.y
+    const el = document.elementFromPoint(x, y)
+    return { x, y, tag: el?.tagName, testid: el?.getAttribute('data-testid'), nodeX: node.x, nodeY: node.y, client }
+  })
+  await page.mouse.click(point.x, point.y)
+  const state = await page.evaluate(() => {
+    const current = window.__measured!.editor
+    const node = current.doc.layers[0].children[0]
+    return {
+      count: current.doc.layers[0].children.length,
+      editing: current.editingTextId,
+      text: node?.text?.content,
+    }
+  })
+  expect(state.text).toBe('Room label')
+  expect(state.count).toBe(1)
+  await expect(page.getByTestId('text-editor')).toHaveValue('Room label')
+})
+
 test('draw-rect live size and dimension', async ({ page }) => {
   await page.goto('./')
   await drawRect(page)

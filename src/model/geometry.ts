@@ -220,9 +220,23 @@ export function paperBounds(node: SceneNode): Rect {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
 }
 
+export function textFrame(node: SceneNode): { w: number; h: number } | null {
+  if (node.kind !== 'text' || !node.text) return null
+  const text = node.text
+  const width = text.mode === 'field' ? Math.max(40, text.fieldWidth) : Math.max(28, text.content.length * text.fontSize * 0.56)
+  const explicitLines = Math.max(1, text.content.split('\n').length)
+  const wrapped = text.mode === 'field' ? Math.max(explicitLines, Math.ceil(text.content.length / Math.max(8, width / (text.fontSize * 0.5)))) : explicitLines
+  const height = Math.max(text.fontSize * 1.6, text.fontSize * text.lineSpacing * wrapped + 6)
+  return { w: width, h: height }
+}
+
 export function hitNode(node: SceneNode, paper: Pt, tolerance: number): boolean {
   if (!node.visible) return false
   const local = paperToLocal(node, paper)
+  const frame = textFrame(node)
+  if (frame) {
+    return local.x >= -tolerance && local.y >= -tolerance && local.x <= frame.w + tolerance && local.y <= frame.h + tolerance
+  }
   const poly = sampleCommands(node.commands)
   const filled = node.appearance.some((a) => a.kind === 'fill' && a.enabled && a.color.a > 0 && !isNoneColor(a))
   if (filled && poly.length >= 3 && pointInPolygon(local, poly)) return true

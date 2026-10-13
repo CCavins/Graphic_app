@@ -3,7 +3,8 @@ import { CATALOG } from '../catalog/catalog'
 import { Editor, LIMITATIONS, type Tool } from '../editor/editor'
 import { canvasRenderer } from '../render/draw'
 import { BLEND_MODES, APPROXIMATE_BLEND } from '../model/types'
-import { PRESETS } from '../model/factory'
+import { findNode, PRESETS } from '../model/factory'
+import { textFrame } from '../model/geometry'
 import { quarterInchFootScale } from '../model/units'
 import { SHORTCUTS } from '../input/shortcuts'
 import { download, loadAutosave, saveAutosave, saveWithPicker } from '../storage/files'
@@ -42,9 +43,17 @@ export function App() {
   const [include, setInclude] = useState<'canvas' | 'objects' | 'selection'>('canvas')
   const [pluginCode, setPluginCode] = useState('api.createRect(40, 40, 80, 50)')
   const fileRef = useRef<HTMLInputElement>(null)
+  const textRef = useRef<HTMLTextAreaElement>(null)
   const results = useMemo(() => editor.search(query), [query, editor.customLibrary.length])
 
   useEffect(() => editor.subscribe(() => setTick((value) => value + 1)), [])
+
+  useEffect(() => {
+    const field = textRef.current
+    if (!field) return
+    field.focus()
+    if (field.value === 'Text') field.select()
+  }, [editor.editingTextId])
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1023px)')
@@ -127,6 +136,7 @@ export function App() {
         /* synthetic events have no capture target */
       }
       editor.pointerDown(fromPointer(event))
+      if (editor.editingTextId) event.preventDefault()
     }
     const onMove = (event: PointerEvent) => {
       const coalesced = event.getCoalescedEvents?.() ?? []
@@ -177,6 +187,9 @@ export function App() {
   const rowHeight = 36
   const start = Math.floor(scroll / rowHeight)
   const visible = results.slice(start, start + 12)
+  const editing = editor.editingTextId ? findNode(editor.doc, editor.editingTextId) : undefined
+  const editingFrame = editing ? textFrame(editing) : null
+  const editingOrigin = editing ? editor.toClient({ x: editing.x, y: editing.y }) : null
 
   return (
     <div className="app">
@@ -242,6 +255,30 @@ export function App() {
       </aside>
       <div className="stage">
         <canvas ref={canvasRef} data-testid="canvas" />
+        {editing?.text && editingFrame && editingOrigin && (
+          <textarea
+            ref={textRef}
+            data-testid="text-editor"
+            className="text-editor"
+            value={editing.text.content}
+            style={{
+              left: editingOrigin.x,
+              top: editingOrigin.y,
+              width: Math.max(80, editingFrame.w * editor.view.zoom),
+              height: Math.max(32, editingFrame.h * editor.view.zoom),
+              fontSize: editing.text.fontSize * editor.view.zoom,
+              fontFamily: editing.text.fontFamily,
+            }}
+            onChange={(event) => editor.setTextContent(event.target.value)}
+            onBlur={() => editor.stopTextEdit()}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.currentTarget.blur()
+              }
+              event.stopPropagation()
+            }}
+          />
+        )}
         <div className="readout" data-testid="readout" style={{ left: 12, top: 12 }}>{editor.readout}</div>
         {editor.context && (
           <div className="menu" data-testid="context-menu" style={{ left: editor.context.x, top: editor.context.y }}>
