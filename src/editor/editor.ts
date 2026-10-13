@@ -26,6 +26,7 @@ import {
   paperBounds,
   reverseCommands,
   scaleCommands,
+  smoothCommands,
 } from '../model/geometry'
 import {
   alignNodes,
@@ -147,6 +148,8 @@ export class Editor {
   preview: SceneNode | null = null
   gaps: GapLine[] = []
   pen: SceneNode['commands'] = []
+  private stroke: Pt[] = []
+  private strokePressure: number[] = []
   polygonSides = 5
   starPoints = 5
   cornerRadius = 12
@@ -266,6 +269,15 @@ export class Editor {
     this.tool = tool
     this.preview = null
     this.pen = []
+    this.stroke = []
+    this.strokePressure = []
+    this.emit()
+  }
+
+  setSnap(worldInches: number | null): void {
+    const enabled = worldInches != null && worldInches > 0
+    this.doc.canvas.grid.snap = enabled
+    this.doc.canvas.grid.snapWorldInches = enabled ? worldInches : null
     this.emit()
   }
 
@@ -282,13 +294,23 @@ export class Editor {
     return pointer.alt || this.touchMods.fromCenter
   }
 
+  private snapStep(): number {
+    const grid = this.doc.canvas.grid
+    if (!grid.snap) return 0
+    if (grid.snapWorldInches && grid.snapWorldInches > 0) {
+      return worldInchesToPaperPoints(grid.snapWorldInches, this.doc.canvas.realInchesPerPoint)
+    }
+    return grid.spacingX > 0 ? grid.spacingX : 0
+  }
+
   private snapped(paper: Pt, pointer: PointerInput): Pt {
     let next = { ...paper }
     const grid = this.doc.canvas.grid
-    if (grid.snap && grid.spacingX > 0 && grid.spacingY > 0) {
+    const step = this.snapStep()
+    if (step > 0) {
       next = {
-        x: Math.round(next.x / grid.spacingX) * grid.spacingX,
-        y: Math.round(next.y / grid.spacingY) * grid.spacingY,
+        x: Math.round(next.x / step) * step,
+        y: Math.round(next.y / step) * step,
       }
     }
     if (grid.snapPoints) {
@@ -366,24 +388,39 @@ export class Editor {
       return
     }
     if (this.tool === 'pen') {
-      this.pen.push(cmd(this.pen.length ? 'L' : 'M', paper.x, paper.y))
-      this.preview = makePath('Pen', 0, 0, this.pen)
-      this.emit()
+      this.drag = { kind: 'pen', start: paper, origin: paper, ids: [], origins: [], moved: false, pointerId: pointer.pointerId }
+      const last = this.pen[this.pen.length - 1]
+      this.stroke = last ? [{ x: last.x, y: last.y }, paper] : [paper]
+      this.strokePressure = []
       return
     }
     if (this.tool === 'zoom') {
       this.zoomAt(pointer.alt ? 1 / 1.25 : 1.25, paper)
       return
     }
-    this.drag = { kind: this.tool === 'pencil' || this.tool === 'brush' ? 'pencil' : 'create', start: paper, origin: paper, ids: [], origins: [], moved: false, pointerId: pointer.pointerId }
-    if (this.tool === 'pencil' || this.tool === 'brush') this.pen = [cmd('M', paper.x, paper.y)]
+    const freehand = this.tool === 'pencil' || this.tool === 'brush'
+    this.drag = { kind: freehand ? 'pencil' : 'create', start: paper, origin: paper, ids: [], origins: [], moved: false, pointerId: pointer.pointerId }
+    if (freehand) {
+      this.stroke = []
+      this.strokePressure = []
+      this.rememberSample(paper, pointer.pressure)
+    }
   }
 
-  pointerMove(pointer: PointerInput): void {
+  pointerMove(pointer: PointerInput, emit = true): void {
     this.lastPointer = pointer
     this.pointers.set(pointer.pointerId, pointer)
-    if (!this.drag || this.drag.pointerId !== pointer.pointerId && this.drag.kind !== 'pinch') return
-    const paper = this.snapped(this.toPaper(pointer), pointer)
+    if (!this.drag) {
+      if (this.tool === 'pen' && this.pen.length && emit) {
+        const hover = this.snapped(this.toPaper(pointer), pointer)
+        this.preview = makePath('Pen', 0, 0, [...this.pen, cmd('L', hover.x, hover.y)])
+        this.emit()
+      }
+      return
+    }
+    if (this.drag.pointerId !== pointer.pointerId && this.drag.kind !== 'pinch') return
+    const raw = this.toPaper(pointer)
+    const paper = this.drag.kind === 'pencil' || this.drag.kind === 'pen' ? raw : this.snapped(raw, pointer)
     const threshold = pointer.type === 'touch' ? 10 : 3
     const clientDelta = Math.hypot(pointer.cx - this.toClient(this.drag.start).x, pointer.cy - this.toClient(this.drag.start).y)
     if (this.drag.kind === 'pan') {
@@ -409,18 +446,10 @@ export class Editor {
       this.applyMove(paper)
       return
     }
-    if (this.drag.kind === 'pencil') {
-      const last = this.pen[this.pen.length - 1]
-      if (!last || Math.hypot(paper.x - last.x, paper.y - last.y) > 1) {
-        this.pen.push(cmd('L', paper.x, paper.y))
-        if (this.tool === 'brush') {
-          const pressures = this.preview?.pressures ?? []
-          pressures.push(pointer.pressure || 0.5)
-          this.preview = makePath('Brush', 0, 0, this.pen)
-          this.preview.pressures = pressures
-        } else this.preview = makePath('Pencil', 0, 0, this.pen)
-      }
-      this.emit()
+    if (this.drag.kind === 'pencil' || this.drag.kind === 'pen') {
+      this.rememberSample(paper, pointer.pressure)
+      if (this.stroke.length >= 2) this.preview = this.freehandNode()
+      if (emit) this.emit()
       return
     }
     this.preview = this.shapeFromDrag(this.drag.start, paper, pointer)
@@ -429,8 +458,10 @@ export class Editor {
       : commandsBounds(this.preview.commands)
     this.readout = `${this.formatPoints(bounds.w)} × ${this.formatPoints(bounds.h)}`
     this.gaps = this.measureGaps(this.preview)
-    this.loupe = pointer.type === 'touch'
-    this.emit()
+    if (emit) {
+      this.loupe = pointer.type === 'touch'
+      this.emit()
+    }
   }
 
   pointerUp(pointer: PointerInput): void {
@@ -444,8 +475,24 @@ export class Editor {
     const drag = this.drag
     this.drag = null
     this.loupe = false
-    if ((drag.kind === 'create' || drag.kind === 'pencil') && !drag.moved) {
-      const paper = this.toPaper(pointer)
+    if (drag.kind === 'pen') {
+      this.finishPen(drag, pointer)
+      return
+    }
+    if (drag.kind === 'pencil') {
+      if (this.stroke.length >= 2) {
+        this.snapshot()
+        this.addNode(this.freehandNode())
+      }
+      this.preview = null
+      this.stroke = []
+      this.strokePressure = []
+      this.readout = ''
+      this.emit()
+      return
+    }
+    if (drag.kind === 'create' && !drag.moved) {
+      const paper = this.snapped(this.toPaper(pointer), pointer)
       const distance = Math.hypot(paper.x - drag.start.x, paper.y - drag.start.y)
       const threshold = pointer.type === 'touch' ? 10 : 3
       if (distance >= threshold) {
@@ -453,7 +500,7 @@ export class Editor {
         this.preview = this.shapeFromDrag(drag.start, paper, pointer)
       }
     }
-    if (drag.kind === 'create' || drag.kind === 'pencil') {
+    if (drag.kind === 'create') {
       if (!drag.moved || !this.preview) {
         this.preview = null
         this.readout = ''
@@ -461,12 +508,6 @@ export class Editor {
         return
       }
       this.snapshot()
-      if (this.tool === 'brush' && this.preview.pressures) {
-        const stroke = this.preview.appearance.find((item) => item.kind === 'stroke')
-        if (stroke && stroke.kind === 'stroke') {
-          stroke.brush = { diameter: 12, angle: 0, roundness: 0.4, minWidth: 0.25 }
-        }
-      }
       this.addNode(this.preview)
       this.preview = null
       this.pen = []
@@ -482,9 +523,61 @@ export class Editor {
     this.preview = null
     this.drag = null
     this.pen = []
+    this.stroke = []
+    this.strokePressure = []
     this.readout = ''
     this.gaps = []
     this.context = null
+    this.emit()
+  }
+
+  private rememberSample(paper: Pt, pressure: number): void {
+    const last = this.stroke[this.stroke.length - 1]
+    if (last) {
+      const from = this.toClient(last)
+      const to = this.toClient(paper)
+      if (Math.hypot(from.x - to.x, from.y - to.y) < 1.25) return
+    }
+    this.stroke.push({ x: paper.x, y: paper.y })
+    this.strokePressure.push(pressure || 0.5)
+  }
+
+  private freehandNode(): SceneNode {
+    const node = makePath(this.tool === 'brush' ? 'Brush' : this.tool === 'pen' ? 'Pen' : 'Pencil', 0, 0, smoothCommands(this.stroke))
+    const fill = node.appearance.find((item) => item.kind === 'fill')
+    if (fill && fill.kind === 'fill') fill.enabled = false
+    if (this.tool === 'brush') {
+      const average = this.strokePressure.reduce((sum, value) => sum + value, 0) / (this.strokePressure.length || 1)
+      const stroke = node.appearance.find((item) => item.kind === 'stroke')
+      if (stroke && stroke.kind === 'stroke') {
+        stroke.width = 1.5 + average * 8
+        stroke.brush = { diameter: 8 + average * 16, angle: 35, roundness: 0.45, minWidth: 0.2 }
+      }
+      node.pressures = [...this.strokePressure]
+    }
+    return node
+  }
+
+  private finishPen(drag: Drag, pointer: PointerInput): void {
+    const end = this.snapped(this.toPaper(pointer), pointer)
+    const travel = Math.hypot(end.x - drag.start.x, end.y - drag.start.y)
+    const drawn = drag.moved && this.stroke.length >= 4 && travel >= 6
+    if (!drawn) {
+      const point = drag.start
+      const last = this.pen[this.pen.length - 1]
+      if (!last) this.pen = [cmd('M', point.x, point.y)]
+      else if (last.x !== point.x || last.y !== point.y) this.pen.push(cmd('L', point.x, point.y))
+      this.preview = makePath('Pen', 0, 0, this.pen)
+      this.stroke = []
+      this.emit()
+      return
+    }
+    this.snapshot()
+    this.addNode(this.freehandNode())
+    this.preview = null
+    this.pen = []
+    this.stroke = []
+    this.strokePressure = []
     this.emit()
   }
 

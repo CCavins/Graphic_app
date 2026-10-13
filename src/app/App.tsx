@@ -8,6 +8,7 @@ import { quarterInchFootScale } from '../model/units'
 import { SHORTCUTS } from '../input/shortcuts'
 import { download, loadAutosave, saveAutosave, saveWithPicker } from '../storage/files'
 import { exportPsd, exportTiff } from '../model/export'
+import { ToolIcon } from './icons'
 import './styles.css'
 
 const TOOLS: { id: Tool; label: string }[] = [
@@ -128,10 +129,16 @@ export function App() {
       editor.pointerDown(fromPointer(event))
     }
     const onMove = (event: PointerEvent) => {
-      performance.mark('pm-start')
-      editor.pointerMove(fromPointer(event))
-      performance.mark('pm-end')
-      performance.measure('pointer-move', 'pm-start', 'pm-end')
+      const coalesced = event.getCoalescedEvents?.() ?? []
+      const drawing = editor.tool === 'pen' || editor.tool === 'pencil' || editor.tool === 'brush'
+      const samples = drawing && coalesced.length ? coalesced : [event]
+      samples.forEach((sample, index) => {
+        const input = fromPointer(sample)
+        performance.mark('pm-start')
+        editor.pointerMove(input, index === samples.length - 1)
+        performance.mark('pm-end')
+        performance.measure('pointer-move', 'pm-start', 'pm-end')
+      })
     }
     const onUp = (event: PointerEvent) => editor.pointerUp(fromPointer(event))
     const onWheel = (event: WheelEvent) => {
@@ -185,6 +192,26 @@ export function App() {
         <button data-testid="new-doc" onClick={() => editor.newDocument('letter')}>New</button>
         <button data-testid="undo" onClick={() => editor.undo()}>Undo</button>
         <button data-testid="redo" onClick={() => editor.redo()}>Redo</button>
+        <label className="snap-control">
+          Snap
+          <select
+            data-testid="snap"
+            value={String(editor.doc.canvas.grid.snapWorldInches ?? 'off')}
+            onChange={(event) => {
+              const value = event.target.value
+              editor.setSnap(value === 'off' ? null : Number(value))
+            }}
+          >
+            <option value="off">Off</option>
+            <option value="0.125">1/8 in</option>
+            <option value="0.25">1/4 in</option>
+            <option value="0.5">1/2 in</option>
+            <option value="1">1 in</option>
+            <option value="6">6 in</option>
+            <option value="12">1 ft</option>
+          </select>
+        </label>
+        <span data-testid="active-tool">{TOOLS.find((tool) => tool.id === editor.tool)?.label}</span>
         <button data-testid="save-file" onClick={() => void saveWithPicker(`${editor.doc.name}.measured`, editor.serialize())}>Save</button>
         <button data-testid="open-file" onClick={() => fileRef.current?.click()}>Open</button>
         <button data-testid="export-open" onClick={() => setExportOpen(true)}>Export</button>
@@ -200,8 +227,16 @@ export function App() {
       </header>
       <aside className="toolbar" data-testid="toolbar">
         {TOOLS.map((tool) => (
-          <button key={tool.id} data-testid={`tool-${tool.id}`} data-active={editor.tool === tool.id} onClick={() => editor.setTool(tool.id)}>
-            {tool.label}
+          <button
+            key={tool.id}
+            className="tool"
+            data-testid={`tool-${tool.id}`}
+            data-active={editor.tool === tool.id}
+            aria-label={tool.label}
+            onClick={() => editor.setTool(tool.id)}
+          >
+            <ToolIcon name={tool.id} />
+            <span className="tip" aria-hidden="true">{tool.label}</span>
           </button>
         ))}
       </aside>

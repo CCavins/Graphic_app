@@ -276,6 +276,32 @@ export function scaleCommands(commands: Cmd[], sx: number, sy: number): Cmd[] {
   }))
 }
 
+/** Pass a smooth cubic through every sample so a stroke follows the pointer. */
+export function smoothCommands(points: Pt[]): Cmd[] {
+  if (!points.length) return []
+  if (points.length === 1) return [cmd('M', points[0].x, points[0].y)]
+  if (points.length === 2) return [cmd('M', points[0].x, points[0].y), cmd('L', points[1].x, points[1].y)]
+  const commands: Cmd[] = [cmd('M', points[0].x, points[0].y)]
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[Math.min(points.length - 1, i + 2)]
+    commands.push(
+      cmd(
+        'C',
+        p2.x,
+        p2.y,
+        p1.x + (p2.x - p0.x) / 6,
+        p1.y + (p2.y - p0.y) / 6,
+        p2.x - (p3.x - p1.x) / 6,
+        p2.y - (p3.y - p1.y) / 6,
+      ),
+    )
+  }
+  return commands
+}
+
 export function reverseCommands(commands: Cmd[]): Cmd[] {
   const pts = sampleCommands(commands, 1)
   if (pts.length < 2) return commands

@@ -138,8 +138,9 @@ export function defaultCanvas(width: number, height: number, baseUnit: BaseUnit)
     background: rgb(255, 255, 255, 1),
     grid: {
       show: true,
-      snap: true,
-      snapPoints: true,
+      snap: false,
+      snapPoints: false,
+      snapWorldInches: null,
       spacingX: baseUnit === 'px' ? 8 : 36,
       spacingY: baseUnit === 'px' ? 8 : 36,
       subdivisions: 4,

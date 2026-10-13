@@ -669,6 +669,79 @@ export const cases: Record<string, () => void> = {
     app.pointerMove(pointer(20, 5))
     expect(app.gaps.length).toBeGreaterThan(0)
   },
+  'cursor-sticks'() {
+    const app = editor()
+    expect(app.doc.canvas.grid.snap).toBe(false)
+    app.setTool('rect')
+    app.pointerDown(pointer(12, 18))
+    app.pointerMove(pointer(113, 67))
+    app.pointerUp(pointer(113, 67))
+    const node = app.doc.layers[0].children[0]
+    const bounds = commandsBounds(node.commands)
+    expect(node.x).toBeCloseTo(12)
+    expect(node.y).toBeCloseTo(18)
+    expect(node.x + bounds.w).toBeCloseTo(113)
+    expect(node.y + bounds.h).toBeCloseTo(67)
+  },
+  'snap-inch'() {
+    const app = editor()
+    app.setSnap(1)
+    app.setTool('rect')
+    app.pointerDown(pointer(10, 20))
+    app.pointerMove(pointer(100, 90))
+    app.pointerUp(pointer(100, 90))
+    const node = app.doc.layers[0].children[0]
+    const bounds = commandsBounds(node.commands)
+    expect(node.x).toBeCloseTo(0)
+    expect(node.y).toBeCloseTo(0)
+    expect(bounds.w).toBeCloseTo(72)
+    expect(bounds.h).toBeCloseTo(72)
+  },
+  'smooth-pencil'() {
+    const app = editor()
+    app.setTool('pencil')
+    const endY = Math.sin(6) * 24
+    app.pointerDown(pointer(0, 0))
+    for (let i = 1; i <= 12; i++) app.pointerMove(pointer(i * 8, Math.sin(i / 2) * 24))
+    app.pointerUp(pointer(96, endY))
+    const node = app.doc.layers[0].children[0]
+    expect(node.commands.some((command) => command.c === 'C')).toBe(true)
+    const end = node.commands[node.commands.length - 1]
+    expect(end.x).toBeCloseTo(96)
+    expect(end.y).toBeCloseTo(endY)
+  },
+  'smooth-pen'() {
+    const app = editor()
+    app.setTool('pen')
+    app.pointerDown(pointer(0, 30))
+    for (let i = 1; i <= 10; i++) app.pointerMove(pointer(i * 10, 30 + Math.sin(i) * 16))
+    app.pointerUp(pointer(100, 30 + Math.sin(10) * 16))
+    const node = app.doc.layers[0].children[0]
+    expect(node.name).toBe('Pen')
+    expect(node.commands.some((command) => command.c === 'C')).toBe(true)
+    expect(node.commands[node.commands.length - 1].x).toBeCloseTo(100)
+  },
+  'tools-follow-cursor'() {
+    for (const tool of ['rect', 'roundRect', 'ellipse', 'line'] as const) {
+      const app = editor()
+      app.setTool(tool)
+      app.pointerDown(pointer(12, 18))
+      app.pointerMove(pointer(90, 70))
+      app.pointerUp(pointer(90, 70))
+      const node = app.doc.layers[0].children[0]
+      if (tool === 'line') {
+        const end = node.commands[node.commands.length - 1]
+        expect(node.x + end.x).toBeCloseTo(90)
+        expect(node.y + end.y).toBeCloseTo(70)
+      } else {
+        const bounds = commandsBounds(node.commands)
+        expect(node.x).toBeCloseTo(12)
+        expect(node.y).toBeCloseTo(18)
+        expect(node.x + bounds.x + bounds.w).toBeCloseTo(90)
+        expect(node.y + bounds.y + bounds.h).toBeCloseTo(70)
+      }
+    }
+  },
 }
 
 for (const [id, run] of Object.entries(cases)) {

@@ -12,6 +12,51 @@ async function drawRect(page: Page) {
   await page.mouse.up()
 }
 
+test('toolbar icons show names on hover', async ({ page }) => {
+  await page.goto('./')
+  const pen = page.getByTestId('tool-pen')
+  await expect(pen).toHaveAttribute('aria-label', 'Pen')
+  await expect(pen.locator('.tip')).toHaveCSS('opacity', '0')
+  await pen.hover()
+  await expect(pen.locator('.tip')).toHaveCSS('opacity', '1')
+  await expect(pen.locator('.tip')).toHaveText('Pen')
+})
+
+test('snap is optional and corners follow the cursor', async ({ page }) => {
+  await page.goto('./')
+  await expect(page.getByTestId('snap')).toHaveValue('off')
+  await page.getByTestId('tool-rect').click()
+  const canvas = page.getByTestId('canvas')
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('canvas missing')
+  const start = { x: box.x + 90, y: box.y + 110 }
+  const end = { x: box.x + 210, y: box.y + 190 }
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down()
+  await page.mouse.move(end.x, end.y, { steps: 4 })
+  await page.mouse.up()
+  const placed = await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    const node = editor.doc.layers[0].children[0]
+    const zoom = editor.view.zoom
+    const originX = editor.view.panX
+    const originY = editor.view.panY
+    return {
+      x: node.x,
+      y: node.y,
+      zoom,
+      originX,
+      originY,
+    }
+  })
+  const paperStartX = (90 - placed.originX) / placed.zoom
+  const paperStartY = (110 - placed.originY) / placed.zoom
+  expect(Math.abs(placed.x - paperStartX)).toBeLessThan(1.5)
+  expect(Math.abs(placed.y - paperStartY)).toBeLessThan(1.5)
+  await page.getByTestId('snap').selectOption('1')
+  await expect(page.getByTestId('active-tool')).toHaveText('Rect')
+})
+
 test('draw-rect live size and dimension', async ({ page }) => {
   await page.goto('./')
   await drawRect(page)

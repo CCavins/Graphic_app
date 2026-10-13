@@ -54,7 +54,46 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding: 0 8px;
 }
 
-.toolbar button[data-active="true"] { background: #1d4e89; color: white; }
+.toolbar button.tool {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.toolbar button.tool .tip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #1c2430;
+  color: white;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.toolbar button.tool:hover .tip,
+.toolbar button.tool:focus-visible .tip {
+  opacity: 1;
+}
+
+.snap-control {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.snap-control select { min-height: 28px; }
 
 .stage { position: relative; min-width: 0; min-height: 0; }
 
@@ -142,6 +181,12 @@ label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
     border-right: 0;
     border-top: 1px solid #d5dbe3;
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .toolbar button.tool .tip {
+    left: 50%;
+    top: auto;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
   }
   .stage { grid-column: 1; grid-row: 2; }
   .inspector {

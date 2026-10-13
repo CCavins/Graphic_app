@@ -210,6 +210,8 @@ export interface GridSettings {
   show: boolean
   snap: boolean
   snapPoints: boolean
+  /** World inches between snap positions. Null keeps the cursor free. */
+  snapWorldInches: number | null
   spacingX: number
   spacingY: number
   subdivisions: number
