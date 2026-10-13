@@ -132,14 +132,42 @@ export interface Precision {
   trimZeros: boolean
 }
 
+export type LabelKind = 'length' | 'width' | 'height' | 'size' | 'area' | 'text'
+export type LabelLocation = 'top' | 'bottom' | 'left' | 'right' | 'center'
+
 export interface ObjectLabel {
-  kind: 'length' | 'width' | 'height' | 'area' | 'text'
+  kind: LabelKind
   text: string
+  /** Which edge of the object's bounds the label sits on. */
+  location: LabelLocation
   offset: number
   align: 'horizontal' | 'vertical' | 'parallel' | 'perpendicular' | 'centered'
   showUnits: boolean
   precision: Precision
 }
+
+export interface TextSpan {
+  start: number
+  end: number
+  bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  color?: Color
+}
+
+/** The last duplicate-plus-transform step, replayed by Smart Duplicate. */
+export interface TransformStep {
+  dx: number
+  dy: number
+  rotate: number
+  scaleX: number
+  scaleY: number
+  shearX: number
+  shearY: number
+  origin: TransformOrigin
+}
+
+export type TransformOrigin = 'nw' | 'n' | 'ne' | 'w' | 'c' | 'e' | 'sw' | 's' | 'se'
 
 export interface DimensionData {
   x1: number
@@ -162,6 +190,9 @@ export interface TextData {
   onPath: boolean
   path: Cmd[]
   pathOffset: number
+  color?: Color
+  /** Character ranges with their own style, from highlighting part of the text. */
+  spans?: TextSpan[]
 }
 
 export interface SceneNode {
@@ -179,7 +210,9 @@ export interface SceneNode {
   children: SceneNode[]
   clip: boolean
   appearance: AppearanceItem[]
+  /** Older files stored one label here. `labels` is the current list. */
   label?: ObjectLabel
+  labels?: ObjectLabel[]
   dimension?: DimensionData
   text?: TextData
   imageId?: string
@@ -235,7 +268,14 @@ export interface CanvasSettings {
   selectionColor: string
   colorPicker: 'popup' | 'panel'
   viewMode: 'vector' | 'pixels' | 'outline'
+  /** Canvas style from the New Document dialog. */
+  style: CanvasStyle
+  colorMode: 'rgb' | 'cmyk'
+  showRulers: boolean
+  smartGuides: boolean
 }
+
+export type CanvasStyle = 'plain' | 'graph' | 'notebook' | 'blueprint'
 
 export interface SavedStyle {
   id: ID
@@ -246,6 +286,9 @@ export interface SavedStyle {
 export interface PatternDef {
   id: ID
   name: string
+  /** Saved from the selection: a tile of paths in paper points. */
+  commands?: Cmd[]
+  size?: number
 }
 
 export interface Doc {

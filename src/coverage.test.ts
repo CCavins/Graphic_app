@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { CATALOG, searchCatalog } from './catalog/catalog'
+import { CATALOG, LIBRARIES, loadCatalog, searchCatalog } from './catalog/catalog'
 import { Editor } from './editor/editor'
 import { exportSvg, importPsd, looksLikePsd } from './model/export'
 import { commandsBounds, paperBounds } from './model/geometry'
@@ -10,7 +10,13 @@ import {
   pixelFootScale,
   quarterInchFootScale,
 } from './model/units'
-import { psdBytes } from './editor/editor'
+import { dashPresetOf, psdBytes } from './editor/editor'
+import type { FillAttr } from './model/types'
+import { labelAnchor, makeLabel, nodeLabels, placedLabels } from './model/labels'
+import { anchors } from './model/transform'
+import { fromHex, hsbToRgb, rgb, rgbToCmyk, rgbToHsb, toHex } from './model/color'
+import { PRESETS } from './model/factory'
+import { SHORTCUTS } from './input/shortcuts'
 
 const pointer = (cx: number, cy: number, extra: Record<string, unknown> = {}) => ({
   cx,
@@ -30,6 +36,9 @@ function editor(): Editor {
   next.view = { zoom: 1, panX: 0, panY: 0 }
   next.doc.canvas.grid.snap = false
   next.doc.canvas.grid.snapPoints = false
+  // Tests press at client (0, 0); keep the ruler strip out of the way.
+  next.doc.canvas.showRulers = false
+  next.doc.canvas.smartGuides = false
   return next
 }
 
@@ -302,28 +311,57 @@ export const cases: Record<string, () => void> = {
     expect(CATALOG.length).toBeGreaterThanOrEqual(2000)
     const ids = new Set(CATALOG.map((item) => item.id))
     expect(ids.size).toBe(CATALOG.length)
+    for (const library of LIBRARIES) expect(CATALOG.some((item) => item.library === library)).toBe(true)
   },
   'catalog-bounds'() {
+    let exact = 0
     for (const item of CATALOG) {
       const bounds = commandsBounds(item.commands)
-      expect(bounds.w).toBeCloseTo(item.worldWidth)
-      expect(bounds.h).toBeCloseTo(item.worldHeight)
+      // The declared real-world box always contains the artwork, and the artwork fills most of it.
+      expect(bounds.x).toBeGreaterThanOrEqual(-0.01)
+      expect(bounds.y).toBeGreaterThanOrEqual(-0.01)
+      expect(bounds.w).toBeLessThanOrEqual(item.worldWidth * 1.02 + 0.02)
+      expect(bounds.h).toBeLessThanOrEqual(item.worldHeight * 1.02 + 0.02)
+      expect(bounds.w >= item.worldWidth * 0.4 || bounds.h >= item.worldHeight * 0.4).toBe(true)
+      if (Math.abs(bounds.w - item.worldWidth) < 0.02 + item.worldWidth * 0.02 && Math.abs(bounds.h - item.worldHeight) < 0.02 + item.worldHeight * 0.02) exact++
       expect(item.name.length).toBeGreaterThan(0)
       expect(item.tags.length).toBeGreaterThan(0)
     }
+    expect(exact / CATALOG.length).toBeGreaterThan(0.97)
   },
   'catalog-search'() {
-    const found = searchCatalog(CATALOG, '65 in TV')
+    const found = searchCatalog(CATALOG, 'single door')
     expect(found.length).toBeGreaterThan(0)
-    expect(found[0].name).toMatch(/65/)
+    expect(found[0].name).toMatch(/door/i)
+    expect(searchCatalog(CATALOG, 'sofa').length).toBeGreaterThan(0)
+    expect(searchCatalog(CATALOG, 'door', 'Floor Plans').every((item) => item.library === 'Floor Plans')).toBe(true)
+  },
+  'catalog-real-symbols'() {
+    // Imported symbols are real artwork, not placeholder rectangles: curves or more than four corners.
+    const imported = CATALOG.filter((item) => item.source === 'drawio' || item.source === 'floorplansvg')
+    expect(imported.length).toBeGreaterThan(1800)
+    const door = CATALOG.find((item) => item.id === 'floor-plan-svg-singledoor')!
+    expect(door.commands.some((command) => command.c === 'C')).toBe(true)
+    const nonRect = imported.filter((item) => item.commands.some((command) => command.c === 'C') || item.commands.filter((command) => command.c !== 'Z').length > 4)
+    expect(nonRect.length / imported.length).toBeGreaterThan(0.9)
+    const sources = new Set(imported.map((item) => item.source))
+    expect(sources.has('drawio') && sources.has('floorplansvg')).toBe(true)
   },
   'place-symbol'() {
     const app = editor()
-    const item = CATALOG.find((entry) => entry.name.startsWith('65 in'))!
+    const item = CATALOG.find((entry) => /door/i.test(entry.name) && entry.source === 'floorplansvg')!
     const id = app.placeSymbol(item.id, 0, 0)
     const node = app.doc.layers[0].children.find((entry) => entry.id === id)!
-    expect(paperBounds(node).w).toBeCloseTo(paperPointsToWorldInches(paperBounds(node).w, 1) === 0 ? 1 : paperBounds(node).w)
-    expect(paperBounds(node).w).toBeCloseTo((item.worldWidth * 72) / (app.doc.canvas.realInchesPerPoint * 72))
+    expect(paperBounds(node).w).toBeCloseTo((item.worldWidth * 72) / (app.doc.canvas.realInchesPerPoint * 72), 0)
+    expect(node.symbolId).toBe(item.id)
+    // Imported symbols come in as line art.
+    expect(app.fillOf(node)?.enabled).toBe(false)
+    expect(app.hit({ x: paperBounds(node).w / 2, y: paperBounds(node).h / 2 }, pointer(0, 0))?.id).toBe(id)
+    // Numbers badges carry their number as a centered text label.
+    const badge = app.placeSymbol('numbers-circle-7', 100, 100)
+    const badgeNode = app.doc.layers[0].children.find((entry) => entry.id === badge)!
+    expect(app.labelText(badgeNode)).toBe('7')
+    expect(app.labelsOf(badgeNode)[0].location).toBe('center')
   },
   'file-roundtrip'() {
     const app = editor()
@@ -549,9 +587,17 @@ export const cases: Record<string, () => void> = {
     app.doc.layers[0].children.push(node)
     app.selection = [node.id]
     app.setGradient()
+    const fill = () => node.appearance.find((item): item is FillAttr => item.kind === 'fill')!
+    expect(fill().gradient?.kind).toBe('linear')
+    expect(fill().gradient?.stops.length).toBeGreaterThanOrEqual(2)
+    app.setGradient('radial')
+    expect(fill().gradient?.kind).toBe('radial')
     app.setPattern('dots')
-    const fill = node.appearance.find((item) => item.kind === 'fill')
-    expect(fill && fill.kind === 'fill' && fill.gradient && fill.patternId).toBeTruthy()
+    expect(fill().patternId).toBe('dots')
+    expect(fill().gradient).toBeUndefined()
+    const saved = app.savePattern('Tile')
+    expect(saved).toBeTruthy()
+    expect(app.doc.patterns.some((pattern) => pattern.id === saved)).toBe(true)
   },
   'styles'() {
     const app = editor()
@@ -761,6 +807,640 @@ export const cases: Record<string, () => void> = {
     }
   },
 }
+
+// ---------- selection bar, appearance, labels, adjusting objects ----------
+
+Object.assign(cases, {
+  'typed-size'() {
+    const app = editor()
+    const node = makeRect(10, 20, 30, 40)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.setNumber('width', '5 in')
+    app.setNumber('height', '20 in')
+    const rect = app.selectionRect()!
+    expect(rect.w).toBeCloseTo(360)
+    expect(rect.h).toBeCloseTo(1440)
+    // Scaling keeps the top-left corner where it was.
+    expect(rect.x).toBeCloseTo(10)
+    expect(rect.y).toBeCloseTo(20)
+    app.setNumber('x', '1 in')
+    app.setNumber('y', '2 in')
+    expect(app.selectionRect()!.x).toBeCloseTo(72)
+    expect(app.selectionRect()!.y).toBeCloseTo(144)
+    app.setNumber('rotation', '45')
+    expect(node.rotation).toBeCloseTo(Math.PI / 4)
+    expect(() => app.setNumber('width', '0 in')).toThrow(/positive/)
+    expect(() => app.setNumber('width', 'abc')).toThrow()
+  },
+  'typed-size-scaled'() {
+    const app = editor()
+    app.setScale(quarterInchFootScale())
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.setNumber('width', "20'")
+    expect(paperPointsToWorldInches(app.selectionRect()!.w, app.doc.canvas.realInchesPerPoint)).toBeCloseTo(240)
+  },
+  'dash-presets'() {
+    const app = editor()
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.setDash('dotted')
+    expect(app.strokeOf(node)!.dash).toEqual([1, 4])
+    expect(dashPresetOf(app.strokeOf(node)!.dash)).toBe('dotted')
+    app.setDash('dashed')
+    expect(dashPresetOf(app.strokeOf(node)!.dash)).toBe('dashed')
+    app.setDash('solid')
+    expect(app.strokeOf(node)!.dash).toEqual([])
+    // The preset also becomes the default for the next shape.
+    app.setDash('dotted')
+    app.selection = []
+    app.setTool('rect')
+    app.pointerDown(pointer(100, 100))
+    app.pointerMove(pointer(150, 140))
+    app.pointerUp(pointer(150, 140))
+    const fresh = app.doc.layers[0].children[1]
+    expect(dashPresetOf(app.strokeOf(fresh)!.dash)).toBe('dotted')
+  },
+  'line-mode-switch'() {
+    const app = editor()
+    app.setTool('line')
+    app.pointerDown(pointer(0, 0))
+    app.pointerMove(pointer(100, 0))
+    app.pointerUp(pointer(100, 0))
+    const line = app.doc.layers[0].children[0]
+    app.selection = [line.id]
+    app.setLineMode('arrow')
+    expect(app.strokeOf(app.one()!)!.arrows).toBe('end')
+    app.setLineMode('dimension')
+    expect(app.one()!.kind).toBe('dimension')
+    expect(app.one()!.dimension!.x2 - app.one()!.dimension!.x1).toBeCloseTo(100)
+    app.setLineMode('plain')
+    expect(app.one()!.kind).toBe('path')
+    expect(app.strokeOf(app.one()!)!.arrows).toBe('none')
+  },
+  'label-strings'() {
+    const app = editor()
+    const node = makeRect(0, 0, 360, 1440)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.addLabel('width')
+    app.addLabel('height')
+    app.addLabel('size')
+    app.addLabel('area')
+    const labels = app.labelsOf(node)
+    const texts = labels.map((label) => app.labelText(node, label))
+    expect(texts).toEqual(['5 in', '20 in', '5 in × 20 in', '100 sq in'])
+    app.setLabelUnit('ft-in')
+    expect(app.labelText(node, labels[2])).toBe('5 in × 1 ft 8 in')
+    app.updateLabel(0, { showUnits: false })
+    app.setLabelUnit('in')
+    expect(app.labelText(node, app.labelsOf(node)[0])).toBe('5')
+    app.updateLabel(0, { precision: { mode: 'decimal', decimals: 2, trimZeros: false } })
+    expect(app.labelText(node, app.labelsOf(node)[0])).toBe('5.00')
+    app.removeLabel(3)
+    expect(app.labelsOf(node)).toHaveLength(3)
+    app.clearLabels()
+    expect(app.labelsOf(node)).toHaveLength(0)
+  },
+  'label-anchors'() {
+    const app = editor()
+    const node = makeRect(0, 0, 200, 100)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.addLabel('width')
+    app.addLabel('height')
+    app.addLabel('size')
+    const placed = placedLabels(node)
+    const width = placed.find((entry) => entry.label.kind === 'width')!
+    const height = placed.find((entry) => entry.label.kind === 'height')!
+    const size = placed.find((entry) => entry.label.kind === 'size')!
+    const w = labelAnchor(node, width.label, width.stackIndex)
+    const h = labelAnchor(node, height.label, height.stackIndex)
+    const s = labelAnchor(node, size.label, size.stackIndex)
+    // Width above the shape, centered.
+    expect(w.x).toBeCloseTo(100)
+    expect(w.y).toBeLessThan(0)
+    // Height on the left, rotated to read upward.
+    expect(h.x).toBeLessThan(0)
+    expect(h.y).toBeCloseTo(50)
+    expect(Math.abs(h.angle)).toBeCloseTo(Math.PI / 2)
+    // Size shares the top edge and stacks above the width label.
+    expect(s.x).toBeCloseTo(100)
+    expect(s.y).toBeLessThan(w.y)
+    const legacy = makeRect(0, 0, 10, 10)
+    legacy.label = makeLabel('area', app.doc.canvas)
+    expect(nodeLabels(legacy)).toHaveLength(1)
+  },
+  'appearance-paints'() {
+    const app = editor()
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.setFillHex('#ff0000')
+    expect(app.hexOf(app.fillOf(node)!.color)).toBe('#ff0000')
+    app.setStrokeHex('#00ff00')
+    app.setStroke({ width: 3 })
+    expect(app.hexOf(app.strokeOf(node)!.color)).toBe('#00ff00')
+    expect(app.strokeOf(node)!.width).toBe(3)
+    app.setFill({ enabled: false })
+    expect(app.fillOf(node)!.enabled).toBe(false)
+    app.setFill({ opacity: 0.5 })
+    expect(app.fillOf(node)!.opacity).toBe(0.5)
+    app.setOpacity(0.25)
+    expect(node.opacity).toBe(0.25)
+    for (const kind of ['dropShadow', 'innerShadow', 'outerGlow', 'innerGlow', 'blur'] as const) {
+      app.toggleEffect(kind, true)
+      expect(app.effectOf(node, kind)!.enabled).toBe(true)
+      app.setEffect(kind, { blur: 9 })
+      expect(app.effectOf(node, kind)!.blur).toBe(9)
+      app.toggleEffect(kind, false)
+      expect(app.effectOf(node, kind)!.enabled).toBe(false)
+    }
+    expect(() => app.setStroke({ width: -1 })).toThrow(/zero or more/)
+    expect(() => app.setOpacity(2)).toThrow(/between 0 and 1/)
+    // The toolbar paint follows the last color chosen.
+    app.selection = []
+    app.setFillHex('#123456')
+    expect(app.hexOf(app.paint.fill)).toBe('#123456')
+    expect(app.copyAsCss.bind(app)).toThrow(/Nothing selected/)
+    app.selection = [node.id]
+    expect(app.copyAsCss()).toMatch(/stroke: rgba\(0, 255, 0, 1\)/)
+    expect(app.copyAsSvg()).toContain('<svg')
+  },
+  'inner-effects-clipped'() {
+    const app = editor()
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.toggleEffect('innerShadow', true)
+    const effect = app.effectOf(node, 'innerShadow')!
+    expect(effect.enabled).toBe(true)
+    // Inner effects live in the appearance list after fill and stroke so they paint on top of them.
+    const order = node.appearance.map((item) => item.kind)
+    expect(order.indexOf('innerShadow')).toBeGreaterThan(order.indexOf('fill'))
+  },
+  'transform-panel'() {
+    const app = editor()
+    const node = makeRect(0, 0, 100, 50)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.transform({ dx: 10, dy: 20 })
+    expect(app.selectionRect()).toMatchObject({ x: 10, y: 20 })
+    app.transform({ scaleX: 2, scaleY: 2, origin: 'c' })
+    const rect = app.selectionRect()!
+    expect(rect.w).toBeCloseTo(200)
+    expect(rect.x + rect.w / 2).toBeCloseTo(60)
+    app.transform({ shearX: Math.PI / 6 })
+    expect(app.selectionRect()!.w).toBeGreaterThan(200)
+    app.transform({ shearX: -Math.PI / 6 })
+    expect(app.selectionRect()!.w).toBeCloseTo(200)
+    app.transform({ rotate: Math.PI / 2, origin: 'c' })
+    const turned = app.selectionRect()!
+    expect(turned.w).toBeCloseTo(100)
+    expect(turned.h).toBeCloseTo(200)
+    // Copy makes a duplicate and remembers the step for Smart Duplicate.
+    const count = app.doc.layers[0].children.length
+    app.transform({ dx: 30 }, { copy: true })
+    expect(app.doc.layers[0].children).toHaveLength(count + 1)
+    const before = app.selectionRect()!.x
+    app.smartDuplicate()
+    expect(app.doc.layers[0].children).toHaveLength(count + 2)
+    expect(app.selectionRect()!.x).toBeCloseTo(before + 30)
+    // Scale styles doubles the stroke width.
+    const styled = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(styled)
+    app.selection = [styled.id]
+    app.transform({ scaleX: 2, scaleY: 2 }, { scaleStyles: true })
+    expect(app.strokeOf(styled)!.width).toBeCloseTo(2)
+  },
+  'copy-paste'() {
+    const app = editor()
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.copy()
+    app.pasteInPlace()
+    expect(app.doc.layers[0].children).toHaveLength(2)
+    expect(app.one()!.x).toBe(0)
+    app.paste({ width: 800, height: 600 })
+    expect(app.doc.layers[0].children).toHaveLength(3)
+    expect(app.one()!.x).toBeCloseTo(395)
+    app.cut()
+    expect(app.doc.layers[0].children).toHaveLength(2)
+    expect(() => editor().paste()).toThrow(/Nothing to paste/)
+    app.key('z', { meta: true })
+    expect(app.doc.layers[0].children).toHaveLength(3)
+    app.selection = [node.id]
+    app.key('d', { meta: true })
+    expect(app.doc.layers[0].children).toHaveLength(4)
+    app.key('a', { meta: true })
+    expect(app.selection).toHaveLength(4)
+  },
+  'option-drag-duplicate'() {
+    const app = editor()
+    const node = makeRect(0, 0, 20, 20)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.pointerDown(pointer(10, 10, { alt: true }))
+    app.pointerMove(pointer(60, 10, { alt: true }))
+    app.pointerUp(pointer(60, 10, { alt: true }))
+    expect(app.doc.layers[0].children).toHaveLength(2)
+    expect(node.x).toBe(0)
+    expect(app.one()!.x).toBeCloseTo(50)
+    app.smartDuplicate()
+    expect(app.one()!.x).toBeCloseTo(100)
+  },
+  'marquee-select'() {
+    const app = editor()
+    const a = makeRect(0, 0, 20, 20)
+    const b = makeRect(100, 0, 20, 20)
+    const c = makeRect(40, 40, 60, 60)
+    app.doc.layers[0].children.push(a, b, c)
+    app.pointerDown(pointer(200, 200))
+    app.pointerMove(pointer(-10, -10))
+    expect(app.marquee).toBeTruthy()
+    expect(app.readout).toContain('×')
+    app.pointerUp(pointer(-10, -10))
+    expect(app.marquee).toBeNull()
+    expect(app.selection.sort()).toEqual([a.id, b.id, c.id].sort())
+    // A partial marquee touches c only.
+    app.pointerDown(pointer(60, 200))
+    app.pointerMove(pointer(70, 60))
+    app.pointerUp(pointer(70, 60))
+    expect(app.selection).toEqual([c.id])
+    // Option requires objects to be fully inside.
+    app.pointerDown(pointer(200, 200, { alt: true }))
+    app.pointerMove(pointer(30, 30, { alt: true }))
+    app.pointerUp(pointer(30, 30, { alt: true }))
+    expect(app.selection).toEqual([c.id])
+    // Shift adds to the selection.
+    app.pointerDown(pointer(-5, -5, { shift: true }))
+    app.pointerMove(pointer(25, 25, { shift: true }))
+    app.pointerUp(pointer(25, 25, { shift: true }))
+    expect(app.selection.sort()).toEqual([a.id, c.id].sort())
+  },
+  'eraser'() {
+    const app = editor()
+    const node = makeRect(0, 0, 100, 100)
+    app.doc.layers[0].children.push(node)
+    const before = commandsBounds(node.commands)
+    app.setTool('eraser')
+    app.eraserWidth = 20
+    app.pointerDown(pointer(50, -20))
+    app.pointerMove(pointer(50, 120))
+    app.pointerUp(pointer(50, 120))
+    const after = app.doc.layers[0].children
+    expect(after).toHaveLength(1)
+    // The corridor splits the square into two pieces that keep the original box.
+    expect(after[0].commands.filter((command) => command.c === 'M')).toHaveLength(2)
+    expect(commandsBounds(after[0].commands)).toMatchObject({ w: before.w, h: before.h })
+    expect(app.hit({ x: 50, y: 50 }, pointer(50, 50))).toBeFalsy()
+    expect(app.hit({ x: 20, y: 50 }, pointer(20, 50))?.id).toBe(after[0].id)
+    app.undo()
+    expect(app.doc.layers[0].children[0].commands.filter((command) => command.c === 'M')).toHaveLength(1)
+  },
+  'scissors-add-anchor'() {
+    const app = editor()
+    const node = makeRect(0, 0, 100, 100)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    const anchorsBefore = anchors(node.commands).length
+    app.addAnchorAt(node.id, { x: 50, y: 0 })
+    expect(anchors(app.one()!.commands).length).toBe(anchorsBefore + 1)
+    app.scissorsAt(node.id, { x: 100, y: 50 })
+    expect(app.one()!.commands.some((command) => command.c === 'Z')).toBe(false)
+    app.setTool('pathSelect')
+    app.anchor = { id: app.one()!.id, index: 1 }
+    app.disconnectAnchor()
+    expect(app.doc.layers[0].children.length).toBe(2)
+  },
+  'anchor-drag'() {
+    const app = editor()
+    const node = makeRect(0, 0, 100, 100)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.setTool('pathSelect')
+    app.pointerDown(pointer(100, 100))
+    app.pointerMove(pointer(130, 140))
+    app.pointerUp(pointer(130, 140))
+    const moved = anchors(node.commands).find((anchor) => Math.abs(anchor.x - 130) < 1 && Math.abs(anchor.y - 140) < 1)
+    expect(moved).toBeTruthy()
+    app.deleteAnchor()
+    expect(anchors(node.commands).length).toBe(3)
+  },
+  'compound-path'() {
+    const app = editor()
+    const outer = makeRect(0, 0, 100, 100)
+    const inner = makeRect(25, 25, 50, 50)
+    app.doc.layers[0].children.push(outer, inner)
+    app.selection = [outer.id, inner.id]
+    app.compound()
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    expect(app.one()!.commands.filter((command) => command.c === 'M')).toHaveLength(2)
+    app.releaseCompound()
+    expect(app.doc.layers[0].children).toHaveLength(2)
+  },
+  'arrange-order'() {
+    const app = editor()
+    const a = makeRect(0, 0, 10, 10)
+    const b = makeRect(0, 0, 10, 10)
+    const c = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(a, b, c)
+    app.selection = [a.id]
+    app.arrange('front')
+    expect(app.doc.layers[0].children[2].id).toBe(a.id)
+    app.arrange('backward')
+    expect(app.doc.layers[0].children[1].id).toBe(a.id)
+    app.arrange('back')
+    expect(app.doc.layers[0].children[0].id).toBe(a.id)
+    app.key(']', { meta: true })
+    expect(app.doc.layers[0].children[1].id).toBe(a.id)
+  },
+  'star-arc-options'() {
+    const app = editor()
+    app.starPoints = 6
+    app.starInnerRadius = 0.7
+    app.setTool('star')
+    app.pointerDown(pointer(0, 0))
+    app.pointerMove(pointer(100, 100))
+    app.pointerUp(pointer(100, 100))
+    const star = app.doc.layers[0].children[0]
+    expect(star.commands.filter((command) => command.c !== 'Z')).toHaveLength(12)
+    const inner = star.commands[1]
+    expect(Math.hypot(inner.x - 50, inner.y - 50) / 50).toBeCloseTo(0.7, 1)
+    app.arcMode = 'pie'
+    app.setTool('arc')
+    app.pointerDown(pointer(200, 0))
+    app.pointerMove(pointer(300, 100))
+    app.pointerUp(pointer(300, 100))
+    const arc = app.doc.layers[0].children[1]
+    expect(arc.commands.some((command) => command.c === 'Z')).toBe(true)
+    expect(app.fillOf(arc)!.enabled).toBe(true)
+    app.cornerRadius = 20
+    app.setTool('roundRect')
+    app.pointerDown(pointer(0, 200))
+    app.pointerMove(pointer(100, 300))
+    app.pointerUp(pointer(100, 300))
+    expect(app.doc.layers[0].children[2].commands.some((command) => command.c === 'C')).toBe(true)
+  },
+  'new-document-styles'() {
+    const app = editor()
+    app.newDocument({ preset: 'a4', orientation: 'portrait', style: 'graph', colorMode: 'cmyk', name: 'Plan' })
+    expect(app.doc.name).toBe('Plan')
+    expect(app.doc.canvas.width).toBeLessThan(app.doc.canvas.height)
+    expect(app.doc.canvas.grid.show).toBe(true)
+    expect(app.doc.canvas.colorMode).toBe('cmyk')
+    expect(app.doc.canvas.style).toBe('graph')
+    app.newDocument({ preset: 'letter', orientation: 'landscape', style: 'blueprint' })
+    expect(app.doc.canvas.width).toBeGreaterThan(app.doc.canvas.height)
+    expect(app.doc.canvas.background).not.toMatchObject({ r: 255, g: 255, b: 255 })
+    app.newDocument({ preset: 'custom', width: 500, height: 400, baseUnit: 'px', style: 'notebook' })
+    expect(app.doc.canvas.width).toBe(500)
+    expect(app.doc.canvas.grid.spacingX).toBe(0)
+    expect(app.doc.canvas.grid.spacingY).toBeGreaterThan(0)
+    expect(PRESETS.some((preset) => preset.id === 'iphone')).toBe(true)
+    app.renameDocument('Kitchen')
+    expect(app.doc.name).toBe('Kitchen')
+  },
+  'text-spans'() {
+    const app = editor()
+    app.setTool('text')
+    app.pointerDown(pointer(40, 40))
+    app.pointerUp(pointer(40, 40))
+    app.setTextContent('Hello world')
+    app.styleTextRange(0, 5, { bold: true })
+    const node = app.doc.layers[0].children[0]
+    expect(node.text!.spans).toEqual([{ start: 0, end: 5, bold: true }])
+    app.styleTextRange(6, 11, { color: { space: 'rgb', r: 255, g: 0, b: 0, a: 1 } })
+    expect(node.text!.spans).toHaveLength(2)
+    // Typing before a span shifts it.
+    app.setTextContent('Oh Hello world')
+    expect(node.text!.spans![0].start).toBe(3)
+    app.setTextProp({ fontSize: 24, align: 'center', lineSpacing: 1.5, charSpacing: 2 })
+    expect(node.text).toMatchObject({ fontSize: 24, align: 'center', lineSpacing: 1.5, charSpacing: 2 })
+    app.textDefaults.fontSize = 30
+    app.stopTextEdit()
+    app.setTool('text')
+    app.pointerDown(pointer(300, 300))
+    app.pointerUp(pointer(300, 300))
+    expect(app.doc.layers[0].children[1].text!.fontSize).toBe(30)
+  },
+  'recolor-preview'() {
+    const app = editor()
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    const before = JSON.stringify(node.appearance)
+    app.beginRecolor()
+    app.previewRecolor({ hue: 0.3, brightness: 0.2 })
+    expect(JSON.stringify(node.appearance)).not.toBe(before)
+    app.resetRecolor()
+    expect(JSON.stringify(node.appearance)).toBe(before)
+    app.beginRecolor()
+    app.previewRecolor({ saturation: -1 })
+    app.commitRecolor()
+    expect(JSON.stringify(node.appearance)).not.toBe(before)
+    app.undo()
+    expect(JSON.stringify(app.doc.layers[0].children[0].appearance)).toBe(before)
+  },
+  'color-conversions'() {
+    expect(toHex(fromHex('#1d4e89')!)).toBe('#1d4e89')
+    const hsb = rgbToHsb(rgb(255, 0, 0))
+    expect(hsb.h).toBeCloseTo(0)
+    expect(hsb.s).toBeCloseTo(1)
+    expect(toHex(hsbToRgb(120, 1, 1))).toBe('#00ff00')
+    const cmykColor = rgbToCmyk(rgb(0, 0, 0))
+    expect(cmykColor.space === 'cmyk' && cmykColor.k).toBeCloseTo(1)
+    expect(fromHex('nope')).toBeNull()
+  },
+  'libraries-manage'() {
+    const app = editor()
+    const node = makeRect(0, 0, 72, 36)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    const id = app.createLibrary('Kitchen', '#ffcc00')
+    app.addToLibrary(id, 'Island')
+    expect(app.customLibraries[0].items).toHaveLength(1)
+    app.renameLibrary(id, 'Kitchen plans', '#00ccff')
+    expect(app.customLibraries[0]).toMatchObject({ name: 'Kitchen plans', color: '#00ccff' })
+    const json = app.exportLibrary(id)
+    const other = editor()
+    other.importLibrary(json)
+    expect(other.customLibraries[0].items[0].name).toBe('Island')
+    expect(other.search('island').length).toBe(1)
+    expect(other.search('island', 'Kitchen plans').length).toBe(1)
+    expect(other.search('island', 'Numbers').length).toBe(0)
+    expect(() => other.importLibrary('{"nope":1}')).toThrow(/not a Measured library/)
+    app.deleteLibrary(id)
+    expect(app.customLibraries).toHaveLength(0)
+    expect(() => app.addToLibrary('missing', 'X')).not.toThrow()
+    expect(app.customLibraries).toHaveLength(1)
+  },
+  'svg-import'() {
+    const app = editor()
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><g transform="translate(10 10)"><rect x="0" y="0" width="40" height="20"/><circle cx="70" cy="30" r="10"/></g><path d="M0 80 L50 90 Q60 95 70 80 Z"/></svg>'
+    const id = app.importSvg(svg, 'Icon')
+    const node = app.doc.layers[0].children.find((item) => item.id === id)!
+    expect(node.name).toBe('Icon')
+    expect(node.commands.filter((command) => command.c === 'M').length).toBe(3)
+    expect(node.commands.some((command) => command.c === 'C')).toBe(true)
+    const bounds = commandsBounds(node.commands)
+    expect(bounds.x).toBeCloseTo(0)
+    expect(bounds.w).toBeCloseTo(90)
+    expect(() => app.importSvg('<svg></svg>')).toThrow(/No paths/)
+  },
+  'image-pdf-import'() {
+    const app = editor()
+    const id = app.importImage('data:image/png;base64,iVBORw0KGgo=', 120, 80, 'Photo')
+    const node = app.doc.layers[0].children.find((item) => item.id === id)!
+    expect(node.kind).toBe('image')
+    expect(app.doc.images[node.imageId!]).toContain('data:image/png')
+    app.selection = [id]
+    app.setImageFill(node.imageId!)
+    const pdf = app.importPdfPage(612, 792, 'brief.pdf')
+    expect(app.doc.layers[0].children.find((item) => item.id === pdf)!.name).toMatch(/placeholder/)
+    expect(app.banner).toMatch(/PDF import/)
+    expect(app.limitation('pdf-import')).toMatch(/page-sized frame/)
+  },
+  'guides-rulers'() {
+    const app = editor()
+    app.doc.canvas.showRulers = true
+    app.view = { zoom: 1, panX: 40, panY: 40 }
+    // Press in the top ruler and drag down onto the canvas: a horizontal guide appears.
+    app.pointerDown(pointer(200, 5))
+    app.pointerMove(pointer(200, 140))
+    expect(app.readout.length).toBeGreaterThan(0)
+    app.pointerUp(pointer(200, 140))
+    expect(app.doc.guides).toHaveLength(1)
+    expect(app.doc.guides[0].axis).toBe('h')
+    expect(app.doc.guides[0].at).toBeCloseTo(100)
+    // Right-click on the ruler opens the ruler menu.
+    app.pointerDown(pointer(5, 200, { button: 2 }))
+    expect(app.context?.kind).toBe('ruler')
+    app.clearGuides()
+    expect(app.doc.guides).toHaveLength(0)
+    app.setCanvas({ baseUnit: 'cm' })
+    expect(app.doc.canvas.baseUnit).toBe('cm')
+  },
+  'smart-guides'() {
+    const app = editor()
+    app.doc.canvas.smartGuides = true
+    const anchorRect = makeRect(100, 0, 20, 20)
+    const moving = makeRect(0, 100, 20, 20)
+    app.doc.layers[0].children.push(anchorRect, moving)
+    app.selection = [moving.id]
+    app.pointerDown(pointer(10, 110))
+    app.pointerMove(pointer(108, 110))
+    expect(app.smartLines.length).toBeGreaterThan(0)
+    app.pointerUp(pointer(108, 110))
+    expect(moving.x).toBeCloseTo(100)
+  },
+  'hit-any-layer'() {
+    const app = editor()
+    const node = makeRect(0, 0, 50, 50)
+    app.doc.layers[0].children.push(node)
+    app.addLayer()
+    expect(app.doc.activeLayerId).not.toBe(app.doc.layers[0].id)
+    app.pointerDown(pointer(25, 25))
+    app.pointerUp(pointer(25, 25))
+    expect(app.selection).toEqual([node.id])
+    expect(app.doc.activeLayerId).toBe(app.doc.layers[0].id)
+  },
+  'symbol-hit-bbox'() {
+    const app = editor()
+    const door = app.placeSymbol('floor-plan-svg-singledoor', 0, 0)
+    const node = app.doc.layers[0].children.find((item) => item.id === door)!
+    const bounds = paperBounds(node)
+    // Line-art symbols select from anywhere inside their box, not only on a stroke.
+    app.pointerDown(pointer(bounds.x + bounds.w / 2, bounds.y + bounds.h / 2))
+    app.pointerUp(pointer(bounds.x + bounds.w / 2, bounds.y + bounds.h / 2))
+    expect(app.selection).toEqual([door])
+  },
+  'gradient-tool'() {
+    const app = editor()
+    const node = makeRect(0, 0, 100, 100)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.setTool('gradient')
+    app.pointerDown(pointer(10, 50))
+    app.pointerMove(pointer(90, 50))
+    app.pointerUp(pointer(90, 50))
+    const fill = app.fillOf(node)!
+    expect(fill.gradient).toBeTruthy()
+    expect(fill.gradient!.x1).toBeCloseTo(10)
+    expect(fill.gradient!.x2).toBeCloseTo(90)
+    app.setGradientStop(1, { offset: 0.8 })
+    expect(fill.gradient!.stops[1].offset).toBe(0.8)
+  },
+  'export-variants'() {
+    const app = editor()
+    const node = makeRect(0, 0, 100, 50)
+    node.name = '@slice:icon.svg'
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.addLabel('size')
+    const svg = app.exportSvg({ include: 'canvas' })
+    expect(svg).toContain('<text')
+    expect(svg).toContain('1.39 in × 0.69 in')
+    expect(app.exportSvg({ scale: 2 })).toContain('<svg')
+    expect(app.sliceExports()).toHaveLength(1)
+    expect(app.sliceExports()[0].filename).toBe('icon.svg')
+    expect(app.layerExports()).toHaveLength(1)
+    app.setLineMode('dimension')
+    app.setTool('line')
+    app.lineMode = 'dimension'
+    app.pointerDown(pointer(0, 200))
+    app.pointerMove(pointer(144, 200))
+    app.pointerUp(pointer(144, 200))
+    expect(app.exportSvg()).toContain('2 in')
+  },
+  'shortcuts-tools'() {
+    const app = editor()
+    for (const [key, tool] of Object.entries({ e: 'eraser', c: 'scissors', g: 'gradient', '+': 'addAnchor', v: 'select', a: 'pathSelect' })) {
+      app.key(key, {})
+      expect(app.tool).toBe(tool)
+    }
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.key('ArrowRight', { shift: true })
+    expect(node.x).toBe(10)
+    app.key('ArrowDown', {})
+    expect(node.y).toBe(1)
+    const other = makeRect(30, 0, 10, 10)
+    app.doc.layers[0].children.push(other)
+    app.selection = [node.id, other.id]
+    app.key('g', { meta: true })
+    expect(app.one()!.kind).toBe('group')
+    app.key('g', { meta: true, shift: true })
+    expect(app.selection).toHaveLength(2)
+    expect(app.doc.layers[0].children.every((item) => item.kind === 'path')).toBe(true)
+    expect(SHORTCUTS.some((item) => item.reserved)).toBe(true)
+  },
+  'dimension-move'() {
+    const app = editor()
+    app.setTool('line')
+    app.lineMode = 'dimension'
+    app.pointerDown(pointer(0, 100))
+    app.pointerMove(pointer(100, 100))
+    app.pointerUp(pointer(100, 100))
+    const dim = app.doc.layers[0].children[0]
+    expect(dim.kind).toBe('dimension')
+    const before = paperBounds(dim)
+    expect(before.w).toBeCloseTo(100)
+    app.setTool('select')
+    app.pointerDown(pointer(50, 128))
+    app.pointerMove(pointer(50, 178))
+    app.pointerUp(pointer(50, 178))
+    expect(paperBounds(dim).y).toBeCloseTo(before.y + 50)
+  },
+})
+
+// The 2000+ imported symbols load lazily in the app; load them once before the cases run.
+await loadCatalog()
 
 for (const [id, run] of Object.entries(cases)) {
   it(id, run)

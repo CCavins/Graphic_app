@@ -1,50 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { CATALOG } from '../catalog/catalog'
-import { Editor, LIMITATIONS, type Tool } from '../editor/editor'
+import { useEffect, useRef, useState } from 'react'
+import { RULER_SIZE, type Editor, type Tool } from '../editor/editor'
 import { canvasRenderer } from '../render/draw'
-import { BLEND_MODES, APPROXIMATE_BLEND } from '../model/types'
-import { findNode, PRESETS } from '../model/factory'
+import { findNode } from '../model/factory'
 import { textFrame } from '../model/geometry'
-import { quarterInchFootScale } from '../model/units'
-import { SHORTCUTS } from '../input/shortcuts'
-import { download, loadAutosave, saveAutosave, saveWithPicker } from '../storage/files'
-import { exportPsd, exportTiff } from '../model/export'
+import type { BaseUnit } from '../model/types'
+import { loadAutosave, saveAutosave, saveWithPicker } from '../storage/files'
+import { ExportDialog, HelpDialog, NewDocumentDialog, PluginsDialog, RecolorDialog, SelectSimilarDialog } from './dialogs'
 import { ToolIcon } from './icons'
+import { editor } from './instance'
+import { OptionsBar, TOOL_NAMES } from './OptionsBar'
+import { AppearancePanel } from './panels/Appearance'
+import { LayersPanel } from './panels/Layers'
+import { LibrariesPanel } from './panels/Libraries'
+import { PropertiesPanel } from './panels/Properties'
+import { ColorWell } from './ui'
 import './styles.css'
 
-const TOOLS: { id: Tool; label: string }[] = [
-  { id: 'select', label: 'Move' },
-  { id: 'pathSelect', label: 'Path' },
-  { id: 'pen', label: 'Pen' },
-  { id: 'pencil', label: 'Pencil' },
-  { id: 'brush', label: 'Brush' },
-  { id: 'line', label: 'Line' },
-  { id: 'arc', label: 'Arc' },
-  { id: 'rect', label: 'Rect' },
-  { id: 'roundRect', label: 'Round' },
-  { id: 'ellipse', label: 'Ellipse' },
-  { id: 'polygon', label: 'Polygon' },
-  { id: 'star', label: 'Star' },
-  { id: 'text', label: 'Text' },
-  { id: 'hand', label: 'Hand' },
-  { id: 'zoom', label: 'Zoom' },
-]
-
-const editor = new Editor()
+const TOOLS: Tool[] = ['select', 'pathSelect', 'pen', 'pencil', 'brush', 'line', 'arc', 'rect', 'roundRect', 'ellipse', 'polygon', 'star', 'text', 'eraser', 'scissors', 'addAnchor', 'gradient', 'hand', 'zoom']
+const PANES = ['Properties', 'Appearance', 'Layers', 'Libraries'] as const
+type Pane = (typeof PANES)[number]
+type DialogName = 'new' | 'export' | 'recolor' | 'similar' | 'plugins' | 'help' | null
 
 export function App() {
   const [, setTick] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [panel, setPanel] = useState<'Canvas' | 'Appearance' | 'Label' | 'Layers' | 'Libraries' | 'Plugins'>('Canvas')
-  const [query, setQuery] = useState('')
-  const [scroll, setScroll] = useState(0)
-  const [exportOpen, setExportOpen] = useState(false)
-  const [format, setFormat] = useState('svg')
-  const [include, setInclude] = useState<'canvas' | 'objects' | 'selection'>('canvas')
-  const [pluginCode, setPluginCode] = useState('api.createRect(40, 40, 80, 50)')
+  const stageRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const textRef = useRef<HTMLTextAreaElement>(null)
-  const results = useMemo(() => editor.search(query), [query, editor.customLibrary.length])
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 1023px)').matches)
+  const [open, setOpen] = useState<Record<Pane, boolean>>({ Properties: true, Appearance: true, Layers: false, Libraries: false })
+  const [sheet, setSheet] = useState<Pane | null>(null)
+  const [dialog, setDialog] = useState<DialogName>(null)
 
   useEffect(() => editor.subscribe(() => setTick((value) => value + 1)), [])
 
@@ -61,9 +47,11 @@ export function App() {
     media.addEventListener('change', update)
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return
-      editor.key(event.key, { shift: event.shiftKey, alt: event.altKey, meta: event.metaKey || event.ctrlKey })
-      if (event.key === ' ') event.preventDefault()
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) return
+      if (dialog) return
+      const stage = stageRef.current?.getBoundingClientRect()
+      editor.key(event.key, { shift: event.shiftKey, alt: event.altKey, meta: event.metaKey || event.ctrlKey }, stage ? { width: stage.width, height: stage.height } : undefined)
+      if (event.key === ' ' || ((event.metaKey || event.ctrlKey) && ['a', 'd', 'g', 'j', '8', '[', ']', 'z'].includes(event.key.toLowerCase()))) event.preventDefault()
     }
     const onKeyUp = (event: KeyboardEvent) => editor.keyUp(event.key)
     window.addEventListener('keydown', onKeyDown)
@@ -73,7 +61,7 @@ export function App() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [])
+  }, [dialog])
 
   useEffect(() => {
     void loadAutosave().then((json) => {
@@ -87,7 +75,7 @@ export function App() {
     const timer = window.setInterval(() => {
       void saveAutosave(editor.serialize())
     }, 2000)
-    const api = {
+    window.__measured = {
       editor,
       seed(count: number) {
         editor.seedRects(count)
@@ -96,7 +84,6 @@ export function App() {
         return performance.getEntriesByName('pointer-move').map((entry) => entry.duration)
       },
     }
-    window.__measured = api
     return () => window.clearInterval(timer)
   }, [])
 
@@ -135,12 +122,13 @@ export function App() {
       } catch {
         /* synthetic events have no capture target */
       }
+      editor.context = null
       editor.pointerDown(fromPointer(event))
       if (editor.editingTextId) event.preventDefault()
     }
     const onMove = (event: PointerEvent) => {
       const coalesced = event.getCoalescedEvents?.() ?? []
-      const drawing = editor.tool === 'pen' || editor.tool === 'pencil' || editor.tool === 'brush'
+      const drawing = editor.tool === 'pen' || editor.tool === 'pencil' || editor.tool === 'brush' || editor.tool === 'eraser'
       const samples = drawing && coalesced.length ? coalesced : [event]
       samples.forEach((sample, index) => {
         const input = fromPointer(sample)
@@ -159,7 +147,11 @@ export function App() {
     const onContext = (event: MouseEvent) => {
       event.preventDefault()
       const bounds = canvas.getBoundingClientRect()
-      editor.context = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+      const x = event.clientX - bounds.left
+      const y = event.clientY - bounds.top
+      const rulers = editor.doc.canvas.showRulers
+      if (rulers && (x < RULER_SIZE || y < RULER_SIZE)) editor.context = { x, y, kind: 'ruler', axis: y < RULER_SIZE ? 'v' : 'h' }
+      else editor.context = { x, y, kind: 'canvas' }
       editor.emit()
     }
     canvas.addEventListener('pointerdown', onDown)
@@ -182,78 +174,86 @@ export function App() {
     }
   }, [])
 
-  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 1023px)').matches)
-  const selected = editor.selection[0]
-  const rowHeight = 36
-  const start = Math.floor(scroll / rowHeight)
-  const visible = results.slice(start, start + 12)
   const editing = editor.editingTextId ? findNode(editor.doc, editor.editingTextId) : undefined
   const editingFrame = editing ? textFrame(editing) : null
   const editingOrigin = editing ? editor.toClient({ x: editing.x, y: editing.y }) : null
+  const selected = editor.one()
+  const fillColor = selected ? editor.fillOf(selected)?.color ?? null : editor.paint.fill
+  const strokeColor = selected ? editor.strokeOf(selected)?.color ?? null : editor.paint.stroke
+  const togglePane = (pane: Pane) => {
+    if (narrow) setSheet((current) => (current === pane ? null : pane))
+    else setOpen((current) => ({ ...current, [pane]: !current[pane] }))
+  }
+  const paneOpen = (pane: Pane) => (narrow ? sheet === pane : open[pane])
+  const closeDialog = () => setDialog(null)
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <strong>Measured</strong>
+    <div className="app" data-narrow={narrow}>
+      <header className="doc-bar">
+        <strong className="brand">Measured</strong>
         <div className="doc-tabs" data-testid="doc-tabs">
           {editor.docs.map((doc, index) => (
-            <button key={doc.id} data-testid="doc-tab" data-active={index === editor.active} onClick={() => editor.selectTab(index)}>
+            <button
+              key={doc.id}
+              className="doc-tab"
+              data-testid="doc-tab"
+              data-active={index === editor.active}
+              onClick={() => editor.selectTab(index)}
+              onDoubleClick={() => {
+                const name = window.prompt('Document name', doc.name)
+                if (name) {
+                  editor.selectTab(index)
+                  editor.renameDocument(name)
+                }
+              }}
+            >
               {doc.name}
+              {index === editor.active && editor.docs.length > 1 && (
+                <span className="close" role="button" aria-label="Close document" onClick={(event) => { event.stopPropagation(); editor.closeDocument() }}>×</span>
+              )}
+            </button>
+          ))}
+          <button className="doc-tab add" data-testid="new-doc" aria-label="New document" onClick={() => setDialog('new')}>+</button>
+        </div>
+        <div className="doc-actions">
+          <button data-testid="undo" onClick={() => editor.undo()} title="Undo ⌘Z">Undo</button>
+          <button data-testid="redo" onClick={() => editor.redo()} title="Redo ⌘⇧Z">Redo</button>
+          <button data-testid="open-file" onClick={() => fileRef.current?.click()}>Open…</button>
+          <button data-testid="save-file" onClick={() => void saveWithPicker(`${editor.doc.name}.measured`, editor.serialize())}>Save</button>
+          <button data-testid="export-open" onClick={() => setDialog('export')}>Export…</button>
+          <button data-testid="plugins-open" onClick={() => setDialog('plugins')}>Plugins</button>
+          <button data-testid="help-open" onClick={() => setDialog('help')} aria-label="Shortcuts and limits">?</button>
+          <input
+            ref={fileRef}
+            data-testid="file-input"
+            hidden
+            type="file"
+            accept=".measured,.json,.svg,.psd,.pdf,image/*"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) void importFile(editor, file)
+              event.target.value = ''
+            }}
+          />
+        </div>
+      </header>
+      <OptionsBar />
+      <aside className="toolbar" data-testid="toolbar">
+        <span className="tool-name" aria-hidden="true">{TOOL_NAMES[editor.tool]}</span>
+        <div className="tools">
+          {TOOLS.map((tool) => (
+            <button key={tool} className="tool" data-testid={`tool-${tool}`} data-active={editor.tool === tool} aria-label={TOOL_NAMES[tool]} onClick={() => editor.setTool(tool)}>
+              <ToolIcon name={tool} />
+              <span className="tip" aria-hidden="true">{TOOL_NAMES[tool]}</span>
             </button>
           ))}
         </div>
-        <button data-testid="new-doc" onClick={() => editor.newDocument('letter')}>New</button>
-        <button data-testid="undo" onClick={() => editor.undo()}>Undo</button>
-        <button data-testid="redo" onClick={() => editor.redo()}>Redo</button>
-        <label className="snap-control">
-          Snap
-          <select
-            data-testid="snap"
-            value={String(editor.doc.canvas.grid.snapWorldInches ?? 'off')}
-            onChange={(event) => {
-              const value = event.target.value
-              editor.setSnap(value === 'off' ? null : Number(value))
-            }}
-          >
-            <option value="off">Off</option>
-            <option value="0.125">1/8 in</option>
-            <option value="0.25">1/4 in</option>
-            <option value="0.5">1/2 in</option>
-            <option value="1">1 in</option>
-            <option value="6">6 in</option>
-            <option value="12">1 ft</option>
-          </select>
-        </label>
-        <span data-testid="active-tool">{TOOLS.find((tool) => tool.id === editor.tool)?.label}</span>
-        <button data-testid="save-file" onClick={() => void saveWithPicker(`${editor.doc.name}.measured`, editor.serialize())}>Save</button>
-        <button data-testid="open-file" onClick={() => fileRef.current?.click()}>Open</button>
-        <button data-testid="export-open" onClick={() => setExportOpen(true)}>Export</button>
-        <input ref={fileRef} data-testid="file-input" hidden type="file" accept=".measured,application/json,.psd" onChange={(event) => {
-          const file = event.target.files?.[0]
-          if (!file) return
-          if (file.name.endsWith('.psd')) {
-            void file.arrayBuffer().then((buffer) => editor.importPsd(new Uint8Array(buffer)))
-            return
-          }
-          void file.text().then((text) => editor.loadText(text))
-        }} />
-      </header>
-      <aside className="toolbar" data-testid="toolbar">
-        {TOOLS.map((tool) => (
-          <button
-            key={tool.id}
-            className="tool"
-            data-testid={`tool-${tool.id}`}
-            data-active={editor.tool === tool.id}
-            aria-label={tool.label}
-            onClick={() => editor.setTool(tool.id)}
-          >
-            <ToolIcon name={tool.id} />
-            <span className="tip" aria-hidden="true">{tool.label}</span>
-          </button>
-        ))}
+        <div className="wells" data-testid="color-wells">
+          <ColorWell testId="well-fill" label="Fill" color={fillColor} size={26} cmyk={editor.doc.canvas.colorMode === 'cmyk'} onChange={(color) => editor.setFill({ color, enabled: true })} />
+          <ColorWell testId="well-stroke" label="Stroke" color={strokeColor} size={26} cmyk={editor.doc.canvas.colorMode === 'cmyk'} onChange={(color) => editor.setStroke({ color, enabled: true })} />
+        </div>
       </aside>
-      <div className="stage">
+      <div className="stage" ref={stageRef}>
         <canvas ref={canvasRef} data-testid="canvas" />
         {editing?.text && editingFrame && editingOrigin && (
           <textarea
@@ -264,32 +264,30 @@ export function App() {
             style={{
               left: editingOrigin.x,
               top: editingOrigin.y,
-              width: Math.max(80, editingFrame.w * editor.view.zoom),
-              height: Math.max(32, editingFrame.h * editor.view.zoom),
+              width: Math.max(80, editingFrame.w * editor.view.zoom + 8),
+              height: Math.max(32, editingFrame.h * editor.view.zoom + 8),
               fontSize: editing.text.fontSize * editor.view.zoom,
               fontFamily: editing.text.fontFamily,
+              textAlign: editing.text.align === 'justify' ? 'left' : editing.text.align,
             }}
             onChange={(event) => editor.setTextContent(event.target.value)}
+            onSelect={(event) => {
+              editor.textSelection = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd }
+            }}
             onBlur={() => editor.stopTextEdit()}
             onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                event.currentTarget.blur()
-              }
+              if (event.key === 'Escape') event.currentTarget.blur()
               event.stopPropagation()
             }}
           />
         )}
-        <div className="readout" data-testid="readout" style={{ left: 12, top: 12 }}>{editor.readout}</div>
-        {editor.context && (
-          <div className="menu" data-testid="context-menu" style={{ left: editor.context.x, top: editor.context.y }}>
-            <button onClick={() => editor.align('left')}>Align left</button>
-            <button onClick={() => editor.duplicate()}>Duplicate</button>
-            <button onClick={() => editor.toggleLock(selected)}>Lock</button>
+        <div className="readout" data-testid="readout" style={{ left: RULER_SIZE + 8, top: RULER_SIZE + 8 }}>{editor.readout}</div>
+        {editor.banner && (
+          <div className="banner" data-testid="banner" role="status">
+            {editor.banner}
+            <button className="icon-button" aria-label="Dismiss" onClick={() => { editor.banner = null; editor.emit() }}>×</button>
           </div>
         )}
-      </div>
-      <aside className="inspector" data-testid="inspector">
-        {editor.banner && <div className="banner" data-testid="banner">{editor.banner}</div>}
         {(narrow || editor.lastPointer?.type === 'touch') && (
           <div className="chips" data-testid="modifier-chips">
             <button className="chip" data-active={editor.touchMods.constrain} onClick={() => { editor.touchMods.constrain = !editor.touchMods.constrain; editor.emit() }}>Constrain</button>
@@ -297,168 +295,129 @@ export function App() {
             <button className="chip" data-active={editor.touchMods.duplicate} onClick={() => { editor.touchMods.duplicate = !editor.touchMods.duplicate; editor.emit() }}>Duplicate</button>
           </div>
         )}
-        <div className="tabs">
-          {(['Canvas', 'Appearance', 'Label', 'Layers', 'Libraries', 'Plugins'] as const).map((name) => (
-            <button key={name} data-testid={`tab-${name}`} data-active={panel === name} onClick={() => setPanel(name)}>{name}</button>
+        {editor.context && <ContextMenu stage={stageRef.current} />}
+      </div>
+      <aside className="inspector" data-testid="inspector" data-sheet={narrow ? (sheet ? 'open' : 'closed') : undefined}>
+        <div className="pane-tabs">
+          {PANES.map((pane) => (
+            <button key={pane} className="pane-tab" data-testid={`tab-${pane}`} data-active={paneOpen(pane)} aria-expanded={paneOpen(pane)} onClick={() => togglePane(pane)}>
+              {pane}
+            </button>
           ))}
         </div>
-        {panel === 'Canvas' && (
-          <div className="stack">
-            <label>Preset
-              <select data-testid="preset" onChange={(event) => editor.newDocument(event.target.value)}>
-                {PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-              </select>
-            </label>
-            <label>Scale
-              <button data-testid="scale-quarter" onClick={() => editor.setScale(quarterInchFootScale())}>1/4 in = 1 ft</button>
-            </label>
-            <label>Label unit
-              <select data-testid="label-unit" value={editor.doc.canvas.labelUnit} onChange={(event) => editor.setLabelUnit(event.target.value as typeof editor.doc.canvas.labelUnit)}>
-                {['px', 'in', 'ft', 'ft-in', 'yd', 'mi', 'mm', 'cm', 'm', 'km'].map((unit) => <option key={unit}>{unit}</option>)}
-              </select>
-            </label>
-            <label>View
-              <select data-testid="view-mode" value={editor.doc.canvas.viewMode} onChange={(event) => { editor.doc.canvas.viewMode = event.target.value as typeof editor.doc.canvas.viewMode; editor.emit() }}>
-                <option value="vector">Vector</option>
-                <option value="pixels">Pixels</option>
-                <option value="outline">Outline</option>
-              </select>
-            </label>
-            <button data-testid="zoom-fit" onClick={() => editor.zoomCommand('fit', { width: 1200, height: 800 })}>Zoom to fit</button>
-            <p data-testid="limitations">{Object.values(LIMITATIONS).join(' ')}</p>
-            <div data-testid="shortcuts">
-              {SHORTCUTS.map((item) => <div key={item.keys}>{item.keys}: {item.action}</div>)}
-            </div>
-          </div>
-        )}
-        {panel === 'Appearance' && (
-          <div className="stack">
-            <button data-testid="add-shadow" onClick={() => editor.enableEffect('dropShadow')}>Drop shadow</button>
-            <button onClick={() => editor.enableEffect('innerShadow')}>Inner shadow</button>
-            <button onClick={() => editor.enableEffect('outerGlow')}>Outer glow</button>
-            <button onClick={() => editor.enableEffect('innerGlow')}>Inner glow</button>
-            <button onClick={() => editor.enableEffect('blur')}>Blur</button>
-            <label>Blend
-              <select data-testid="blend" onChange={(event) => editor.setBlend(event.target.value as (typeof BLEND_MODES)[number])}>
-                {BLEND_MODES.map((mode) => <option key={mode} value={mode}>{mode}{APPROXIMATE_BLEND.has(mode) ? ' (approx)' : ''}</option>)}
-              </select>
-            </label>
-            <button data-testid="copy-style" onClick={() => editor.copyStyle()}>Copy style</button>
-            <button data-testid="paste-style" onClick={() => editor.pasteStyle()}>Paste style</button>
-            <button data-testid="gradient" onClick={() => editor.setGradient()}>Gradient</button>
-            <button data-testid="pattern" onClick={() => editor.setPattern('stripes')}>Stripes</button>
-            <button data-testid="select-similar" onClick={() => editor.selectSimilar('fill-color', 'all')}>Select similar</button>
-            <button data-testid="recolor" onClick={() => editor.recolor('hue', 0.1)}>Recolor</button>
-          </div>
-        )}
-        {panel === 'Label' && (
-          <div className="stack">
-            <button data-testid="label-width" onClick={() => editor.setLabel('width')}>Width label</button>
-            <button onClick={() => editor.setLabel('height')}>Height label</button>
-            <button onClick={() => editor.setLabel('area')}>Area label</button>
-            <button onClick={() => editor.setLabel('text', 'Note')}>Text label</button>
-          </div>
-        )}
-        {panel === 'Layers' && (
-          <div className="stack" data-testid="layers">
-            <button data-testid="add-layer" onClick={() => editor.addLayer()}>Add layer</button>
-            {editor.doc.layers.map((layer) => (
-              <div key={layer.id}>
-                <button data-testid="layer" data-active={layer.id === editor.doc.activeLayerId} onClick={() => { editor.doc.activeLayerId = layer.id; editor.emit() }}>{layer.name}</button>
-                <button onClick={() => editor.toggleLock(layer.id)}>{layer.locked ? 'Unlock' : 'Lock'}</button>
-              </div>
-            ))}
-            <button data-testid="group" onClick={() => editor.group()}>Group</button>
-            <button data-testid="align-left" onClick={() => editor.align('left')}>Align left</button>
-            <button data-testid="distribute" onClick={() => editor.distribute('h')}>Distribute</button>
-            <button data-testid="flip" onClick={() => editor.flip('h')}>Flip</button>
-            <button data-testid="union" onClick={() => editor.boolean('union')}>Union</button>
-          </div>
-        )}
-        {panel === 'Libraries' && (
-          <div className="stack">
-            <input data-testid="library-search" value={query} placeholder="Search shapes" onChange={(event) => { setQuery(event.target.value); setScroll(0) }} />
-            <div className="library" data-testid="library-list" onScroll={(event) => setScroll(event.currentTarget.scrollTop)}>
-              <div style={{ height: results.length * rowHeight }}>
-                {visible.map((item, index) => (
-                  <button key={item.id} data-testid="symbol-item" style={{ top: (start + index) * rowHeight }} onClick={() => editor.placeSymbol(item.id)}>
-                    {item.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <p data-testid="catalog-count">{CATALOG.length} shapes</p>
-          </div>
-        )}
-        {panel === 'Plugins' && (
-          <div className="stack">
-            <textarea data-testid="plugin-code" value={pluginCode} onChange={(event) => setPluginCode(event.target.value)} rows={6} />
-            <button data-testid="plugin-run" onClick={() => editor.runPlugin(pluginCode)}>Run</button>
-            <button data-testid="plugin-save" onClick={() => editor.savePlugin('Plugin', pluginCode)}>Save</button>
-          </div>
-        )}
+        <div className="panes">
+          {PANES.map((pane) => (
+            <section key={pane} className="pane" data-testid={`pane-${pane}`} data-open={paneOpen(pane)}>
+              {!narrow && (
+                <button className="pane-head" onClick={() => togglePane(pane)} aria-expanded={paneOpen(pane)}>
+                  <span className="chev">{paneOpen(pane) ? '▾' : '▸'}</span> {pane}
+                </button>
+              )}
+              {paneOpen(pane) && (
+                <div className="pane-body">
+                  {pane === 'Properties' && <PropertiesPanel />}
+                  {pane === 'Appearance' && <AppearancePanel onRecolor={() => setDialog('recolor')} onSelectSimilar={() => setDialog('similar')} />}
+                  {pane === 'Layers' && <LayersPanel />}
+                  {pane === 'Libraries' && <LibrariesPanel />}
+                </div>
+              )}
+            </section>
+          ))}
+        </div>
       </aside>
-      {exportOpen && (
-        <dialog className="dialog" open data-testid="export-dialog">
-          <div className="stack">
-            <label>Format
-              <select data-testid="export-format" value={format} onChange={(event) => setFormat(event.target.value)}>
-                {['svg', 'png', 'jpeg', 'pdf', 'gif', 'tiff', 'psd'].map((item) => <option key={item}>{item}</option>)}
-              </select>
-            </label>
-            <label>Include
-              <select data-testid="export-include" value={include} onChange={(event) => setInclude(event.target.value as typeof include)}>
-                <option value="canvas">Entire canvas</option>
-                <option value="objects">All objects</option>
-                <option value="selection">Selection</option>
-              </select>
-            </label>
-            <label>JPEG quality <input data-testid="jpeg-quality" type="number" defaultValue={0.9} min={0.1} max={1} step={0.1} /></label>
-            <button data-testid="export-confirm" onClick={() => void confirmExport(editor, format, include)}>Download</button>
-            <button onClick={() => setExportOpen(false)}>Close</button>
-          </div>
-        </dialog>
-      )}
+      {dialog === 'new' && <NewDocumentDialog onClose={closeDialog} />}
+      {dialog === 'export' && <ExportDialog onClose={closeDialog} />}
+      {dialog === 'recolor' && <RecolorDialog onClose={closeDialog} />}
+      {dialog === 'similar' && <SelectSimilarDialog onClose={closeDialog} />}
+      {dialog === 'plugins' && <PluginsDialog onClose={closeDialog} />}
+      {dialog === 'help' && <HelpDialog onClose={closeDialog} />}
     </div>
   )
 }
 
-async function confirmExport(editor: Editor, format: string, include: 'canvas' | 'objects' | 'selection'): Promise<void> {
-  try {
-    if (format === 'svg') {
-      download(`${editor.doc.name}.svg`, editor.exportSvg({ include }), 'image/svg+xml')
-      return
-    }
-    if (format === 'pdf') {
-      const bytes = await editor.exportPdf({ include })
-      download(`${editor.doc.name}.pdf`, new Blob([bytes.slice()]), 'application/pdf')
-      return
-    }
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(editor.doc.canvas.width))
-    canvas.height = Math.max(1, Math.round(editor.doc.canvas.height))
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    const view = { ...editor.view }
-    editor.view = { zoom: 1, panX: 0, panY: 0 }
-    canvasRenderer.render(ctx, canvas.width, canvas.height, 1, editor)
-    editor.view = view
-    if (format === 'psd') {
-      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data
-      download(`${editor.doc.name}.psd`, new Blob([new Uint8Array(exportPsd(canvas.width, canvas.height, pixels))]), 'image/vnd.adobe.photoshop')
-      return
-    }
-    if (format === 'tiff') {
-      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data
-      download(`${editor.doc.name}.tiff`, new Blob([new Uint8Array(exportTiff(canvas.width, canvas.height, pixels))]), 'image/tiff')
-      return
-    }
-    const mime = format === 'jpeg' ? 'image/jpeg' : format === 'gif' ? 'image/gif' : 'image/png'
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mime === 'image/gif' ? 'image/png' : mime, 0.9))
-    if (blob) download(`${editor.doc.name}.${format}`, blob, mime)
-  } catch (error) {
-    editor.banner = error instanceof Error ? error.message : 'Export failed'
+function ContextMenu({ stage }: { stage: HTMLDivElement | null }) {
+  const context = editor.context
+  if (!context) return null
+  const close = () => {
+    editor.context = null
     editor.emit()
+  }
+  const run = (fn: () => void) => () => {
+    fn()
+    close()
+  }
+  const width = stage?.clientWidth ?? 800
+  const height = stage?.clientHeight ?? 600
+  const style = { left: Math.min(context.x, width - 190), top: Math.min(context.y, height - 240) }
+  if (context.kind === 'ruler') {
+    const paper = editor.toPaper({ cx: context.x, cy: context.y })
+    return (
+      <div className="menu" data-testid="context-menu" style={style}>
+        <button data-testid="ruler-guide" onClick={run(() => editor.addGuide(context.axis ?? 'h', context.axis === 'v' ? paper.x : paper.y))}>Add guide here</button>
+        <button onClick={run(() => editor.clearGuides())}>Clear guides</button>
+        <hr />
+        {(['px', 'in', 'cm', 'mm'] as BaseUnit[]).map((unit) => (
+          <button key={unit} data-testid={`ruler-unit-${unit}`} data-active={editor.doc.canvas.baseUnit === unit} onClick={run(() => editor.setCanvas({ baseUnit: unit }))}>
+            Ruler in {unit}
+          </button>
+        ))}
+        <button onClick={run(() => editor.setCanvas({ showRulers: false }))}>Hide rulers</button>
+      </div>
+    )
+  }
+  const has = editor.selection.length > 0
+  const viewport = { width, height }
+  return (
+    <div className="menu" data-testid="context-menu" style={style}>
+      <button disabled={!has} onClick={run(() => editor.cut())}>Cut</button>
+      <button disabled={!has} onClick={run(() => editor.copy())}>Copy</button>
+      <button disabled={!editor.clipboardNodes} onClick={run(() => editor.paste(viewport))}>Paste</button>
+      <button disabled={!editor.clipboardNodes} onClick={run(() => editor.pasteInPlace())}>Paste in place</button>
+      <button disabled={!has} data-testid="menu-duplicate" onClick={run(() => editor.duplicate())}>Duplicate</button>
+      <hr />
+      <button disabled={!has} onClick={run(() => editor.group())}>Group</button>
+      <button disabled={!has} onClick={run(() => editor.arrange('front'))}>Bring to front</button>
+      <button disabled={!has} onClick={run(() => editor.arrange('back'))}>Send to back</button>
+      <button disabled={!has} onClick={run(() => editor.selection.forEach((id) => editor.toggleLock(id)))}>Lock / unlock</button>
+      <hr />
+      <button disabled={!has} onClick={run(() => editor.addLabel('size'))}>Add size label</button>
+      <button disabled={!has} onClick={run(() => editor.deleteSelection())}>Delete</button>
+      <button onClick={run(() => editor.selectAll())}>Select all</button>
+    </div>
+  )
+}
+
+async function importFile(target: Editor, file: File): Promise<void> {
+  const name = file.name.toLowerCase()
+  try {
+    if (name.endsWith('.svg')) {
+      target.importSvg(await file.text(), file.name.replace(/\.svg$/i, ''))
+    } else if (name.endsWith('.psd')) {
+      target.importPsd(new Uint8Array(await file.arrayBuffer()), file.name)
+    } else if (name.endsWith('.pdf')) {
+      target.importPdfPage(612, 792, file.name)
+    } else if (file.type.startsWith('image/')) {
+      const href = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(new Error('Could not read the image'))
+        reader.readAsDataURL(file)
+      })
+      const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
+        img.onerror = () => reject(new Error('Could not decode the image'))
+        img.src = href
+      })
+      target.importImage(href, size.width, size.height, file.name)
+    } else {
+      const text = await file.text()
+      if (/"library"\s*:/.test(text) && !/"document"\s*:/.test(text)) target.importLibrary(text)
+      else target.loadText(text)
+    }
+  } catch (error) {
+    target.banner = error instanceof Error ? error.message : 'Import failed'
+    target.emit()
   }
 }
 

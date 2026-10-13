@@ -1,11 +1,19 @@
 import { expect, it } from 'vitest'
-import { CATALOG, searchCatalog } from './catalog/catalog'
+import { CATALOG, loadCatalog, searchCatalog } from './catalog/catalog'
 import { Editor } from './editor/editor'
 import { makeRect } from './model/factory'
 
-it('search-perf', () => {
+it('catalog-load-perf', async () => {
   const start = performance.now()
-  const found = searchCatalog(CATALOG, '65')
+  await loadCatalog()
+  expect(performance.now() - start).toBeLessThan(1500)
+  expect(CATALOG.length).toBeGreaterThanOrEqual(2000)
+})
+
+it('search-perf', async () => {
+  await loadCatalog()
+  const start = performance.now()
+  const found = searchCatalog(CATALOG, 'door')
   expect(performance.now() - start).toBeLessThan(50)
   expect(found.length).toBeGreaterThan(0)
 })

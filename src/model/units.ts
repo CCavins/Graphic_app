@@ -169,12 +169,12 @@ export function formatWorldLength(
           : inches >= 1
             ? `${Math.floor(inches)} ${rounded.num}/${rounded.den}`
             : `${rounded.num}/${rounded.den}`
-      const body = inches === 0 ? `${feet} ft` : `${feet} ft ${inchText} in`
+      const body = inches === 0 ? `${feet} ft` : feet === 0 ? `${inchText} in` : `${feet} ft ${inchText} in`
       return sign + (showUnits ? body : body.replace(/ ft/g, "'").replace(/ in/g, '"'))
     }
     const inchText = formatNumber(inches, precision)
-    const body = Number(inchText) === 0 ? `${feet} ft` : `${feet} ft ${inchText} in`
-    return sign + body
+    const body = Number(inchText) === 0 ? `${feet} ft` : feet === 0 ? `${inchText} in` : `${feet} ft ${inchText} in`
+    return sign + (showUnits ? body : body.replace(/ ft/g, "'").replace(/ in/g, '"'))
   }
   const amount = fromInches(worldInches, unit)
   const num = formatNumber(amount, precision)

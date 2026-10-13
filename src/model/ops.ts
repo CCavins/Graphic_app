@@ -1,4 +1,4 @@
-import { adjustColor, colorsEqual, toRgb } from './color'
+import { adjustColor, colorsEqual, toRgb, type AdjustMethod } from './color'
 import { commandsBounds, paperBounds, unionBounds } from './geometry'
 import type { AppearanceItem, Doc, Rect, SceneNode } from './types'
 import { findNode, parentList, selectedNodes } from './factory'
@@ -132,7 +132,7 @@ export function selectSimilar(doc: Doc, source: SceneNode, key: SimilarKey, scop
   return ids
 }
 
-export function recolorNode(node: SceneNode, method: 'hue' | 'balance' | 'brightness', amount: number): void {
+export function recolorNode(node: SceneNode, method: AdjustMethod, amount: number): void {
   for (const attr of node.appearance) {
     if (attr.kind === 'blur') continue
     attr.color = adjustColor(attr.color, method, amount)
@@ -258,9 +258,14 @@ export function sendBackward(doc: Doc, id: string): void {
 export function cssOf(node: SceneNode): string {
   const fill = node.appearance.find((a) => a.kind === 'fill' && a.enabled)
   const stroke = node.appearance.find((a) => a.kind === 'stroke' && a.enabled)
-  const fillCss = fill && fill.kind === 'fill' ? `fill: ${toRgb(fill.color).r};` : 'fill: none;'
-  const strokeCss = stroke && stroke.kind === 'stroke' ? `stroke-width: ${stroke.width}px;` : ''
-  return `${fillCss} ${strokeCss}`.trim()
+  const css = (color: Parameters<typeof toRgb>[0]) => {
+    const c = toRgb(color)
+    return `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`
+  }
+  const fillCss = fill && fill.kind === 'fill' ? `fill: ${css(fill.color)};` : 'fill: none;'
+  const strokeCss = stroke && stroke.kind === 'stroke' ? `stroke: ${css(stroke.color)}; stroke-width: ${stroke.width}px;` : 'stroke: none;'
+  const opacity = node.opacity < 1 ? ` opacity: ${node.opacity};` : ''
+  return `${fillCss} ${strokeCss}${opacity}`.trim()
 }
 
 export function cloneNode(node: SceneNode, dx = 16, dy = 16): SceneNode {

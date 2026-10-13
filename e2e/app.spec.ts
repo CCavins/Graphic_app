@@ -128,15 +128,107 @@ test('wheel pan and pinch zoom', async ({ page }) => {
   expect(zoom).toBeGreaterThan(before.zoom)
 })
 
-test('library search stays virtualized', async ({ page }) => {
+test('shell matches the Graphic layout', async ({ page }) => {
+  await page.goto('./')
+  // Document tabs on top, tool options under them, tools on the left, inspectors on the right.
+  await expect(page.getByTestId('doc-tabs')).toBeVisible()
+  await expect(page.getByTestId('doc-tab').first()).toContainText(/Untitled/)
+  await expect(page.getByTestId('options-bar')).toBeVisible()
+  await expect(page.getByTestId('active-tool')).toHaveText('Move')
+  const toolbar = await page.getByTestId('toolbar').boundingBox()
+  const inspector = await page.getByTestId('inspector').boundingBox()
+  const canvas = await page.getByTestId('canvas').boundingBox()
+  if (!toolbar || !inspector || !canvas) throw new Error('shell missing')
+  expect(toolbar.x).toBeLessThan(canvas.x)
+  expect(inspector.x).toBeGreaterThan(canvas.x + canvas.width - 1)
+  await expect(page.getByTestId('well-fill')).toBeVisible()
+  await expect(page.getByTestId('well-stroke')).toBeVisible()
+  for (const pane of ['Properties', 'Appearance', 'Layers', 'Libraries']) {
+    await expect(page.getByTestId(`tab-${pane}`)).toBeVisible()
+  }
+  await expect(page.getByTestId('pane-Properties')).toHaveAttribute('data-open', 'true')
+  await expect(page.getByTestId('section-canvas')).toBeVisible()
+  await expect(page.getByTestId('section-label')).toBeVisible()
+  await page.getByTestId('tab-Layers').click()
+  await expect(page.getByTestId('layers')).toBeVisible()
+  // The options bar shows the second tool's name and options as tools change.
+  await page.getByTestId('tool-star').click()
+  await expect(page.getByTestId('active-tool')).toHaveText('Star')
+  await expect(page.getByTestId('star-points')).toBeVisible()
+  await page.getByTestId('new-doc').click()
+  await expect(page.getByTestId('new-document')).toBeVisible()
+  await page.getByTestId('style-graph').click()
+  await page.getByTestId('new-create').click()
+  await expect(page.getByTestId('doc-tab')).toHaveCount(2)
+})
+
+test('typed size, labels, and dotted stroke', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  await expect(page.getByTestId('field-w')).toBeEnabled()
+  await page.getByTestId('field-w').fill('5 in')
+  await page.getByTestId('field-w').press('Enter')
+  await page.getByTestId('field-h').fill('20 in')
+  await page.getByTestId('field-h').press('Enter')
+  const size = await page.evaluate(() => {
+    const rect = window.__measured!.editor.selectionRect()!
+    return { w: rect.w / 72, h: rect.h / 72 }
+  })
+  expect(size.w).toBeCloseTo(5, 3)
+  expect(size.h).toBeCloseTo(20, 3)
+  await expect(page.getByTestId('field-w')).toHaveValue(/5 in/)
+  await expect(page.getByTestId('field-h')).toHaveValue(/20 in/)
+  await page.getByTestId('label-width').click()
+  await page.getByTestId('label-height').click()
+  await page.getByTestId('label-size').click()
+  const labels = await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    const node = editor.one()!
+    return editor.labelsOf(node).map((label) => editor.labelText(node, label))
+  })
+  expect(labels).toEqual(['5 in', '20 in', '5 in × 20 in'])
+  await expect(page.getByTestId('label-list')).toContainText('5 in × 20 in')
+  await page.getByTestId('dash').selectOption('dotted')
+  const dash = await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    return editor.strokeOf(editor.one()!)!.dash
+  })
+  expect(dash).toEqual([1, 4])
+  await expect(page.getByTestId('stroke-dash')).toHaveValue('dotted')
+  // Appearance paints: a new fill color lands on the shape.
+  await page.getByTestId('fill-hex').fill('#ff0000')
+  await page.getByTestId('fill-hex').press('Enter')
+  const fill = await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    return editor.hexOf(editor.fillOf(editor.one()!)!.color)
+  })
+  expect(fill).toBe('#ff0000')
+})
+
+test('library search places real symbols', async ({ page }) => {
   await page.goto('./')
   await page.getByTestId('tab-Libraries').click()
-  await expect(page.getByTestId('catalog-count')).toContainText(/\d/)
+  await expect(page.getByTestId('catalog-count')).toContainText(/2\d{3} shapes/)
   const count = await page.getByTestId('symbol-item').count()
   expect(count).toBeLessThan(30)
   expect(count).toBeGreaterThan(0)
-  await page.getByTestId('library-search').fill('65 in TV')
-  await expect(page.getByTestId('symbol-item').first()).toContainText('65')
+  await page.getByTestId('library-search').fill('door')
+  await expect(page.getByTestId('symbol-item').first()).toContainText(/door/i)
+  await page.getByTestId('symbol-item').first().click()
+  await page.getByTestId('library-search').fill('sofa')
+  await expect(page.getByTestId('symbol-item').first()).toContainText(/sofa/i)
+  await page.getByTestId('symbol-item').first().click()
+  const placed = await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    return editor.doc.layers[0].children.map((node) => ({ name: node.name, symbol: node.symbolId, curves: node.commands.some((c) => c.c === 'C') }))
+  })
+  expect(placed).toHaveLength(2)
+  expect(placed[0].name).toMatch(/door/i)
+  expect(placed[1].name).toMatch(/sofa/i)
+  expect(placed.every((node) => node.symbol)).toBe(true)
+  await page.getByTestId('library-filter').selectOption('Floor Plans')
+  await page.getByTestId('library-search').fill('')
+  await expect(page.getByTestId('symbol-item').first()).toContainText('Floor Plans')
 })
 
 test('corrupt file keeps the document', async ({ page }) => {

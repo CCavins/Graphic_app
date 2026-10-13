@@ -60,14 +60,15 @@ export function polygonCommands(w: number, h: number, sides: number): Cmd[] {
   return cmds
 }
 
-export function starCommands(w: number, h: number, points: number): Cmd[] {
+export function starCommands(w: number, h: number, points: number, innerRadius = 0.4): Cmd[] {
   const n = Math.max(3, Math.round(points))
+  const inner = Math.max(0.05, Math.min(0.95, innerRadius))
   const cx = w / 2
   const cy = h / 2
   const cmds: Cmd[] = []
   for (let i = 0; i < n * 2; i++) {
     const a = -Math.PI / 2 + (i * Math.PI) / n
-    const rad = i % 2 === 0 ? 1 : 0.4
+    const rad = i % 2 === 0 ? 1 : inner
     const x = cx + Math.cos(a) * cx * rad
     const y = cy + Math.sin(a) * cy * rad
     cmds.push(cmd(i === 0 ? 'M' : 'L', x, y))
@@ -76,12 +77,16 @@ export function starCommands(w: number, h: number, points: number): Cmd[] {
   return cmds
 }
 
-export function arcCommands(w: number, h: number): Cmd[] {
+/** A quarter-ellipse arc. Pie closes through the corner, chord closes straight across. */
+export function arcCommands(w: number, h: number, mode: 'open' | 'pie' | 'chord' = 'open'): Cmd[] {
   const rx = Math.abs(w)
   const ry = Math.abs(h)
   const kx = rx * 0.5522847498
   const ky = ry * 0.5522847498
-  return [cmd('M', 0, ry), cmd('C', rx, 0, 0, ry - ky, rx - kx, 0)]
+  const arc = [cmd('M', 0, ry), cmd('C', rx, 0, 0, ry - ky, rx - kx, 0)]
+  if (mode === 'pie') return [...arc, cmd('L', rx, ry), cmd('Z')]
+  if (mode === 'chord') return [...arc, cmd('Z')]
+  return arc
 }
 
 export function commandsBounds(commands: Cmd[]): Rect {
@@ -192,6 +197,15 @@ export function paperToLocal(node: Pick<SceneNode, 'x' | 'y' | 'rotation' | 'com
 }
 
 export function paperBounds(node: SceneNode): Rect {
+  if (node.dimension) {
+    const d = node.dimension
+    const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1) || 1
+    const ox = (-(d.y2 - d.y1) / len) * d.offset
+    const oy = ((d.x2 - d.x1) / len) * d.offset
+    const xs = [d.x1, d.x2, d.x1 + ox, d.x2 + ox].map((v) => v + node.x)
+    const ys = [d.y1, d.y2, d.y1 + oy, d.y2 + oy].map((v) => v + node.y)
+    return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }
+  }
   const samples = sampleCommands(node.commands.length ? node.commands : [cmd('M', 0, 0), cmd('L', 1, 0), cmd('L', 1, 1), cmd('L', 0, 1)])
   let minX = Infinity
   let minY = Infinity
@@ -232,10 +246,25 @@ export function textFrame(node: SceneNode): { w: number; h: number } | null {
 
 export function hitNode(node: SceneNode, paper: Pt, tolerance: number): boolean {
   if (!node.visible) return false
+  if (node.dimension) {
+    const d = node.dimension
+    const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1) || 1
+    const ox = (-(d.y2 - d.y1) / len) * d.offset
+    const oy = ((d.x2 - d.x1) / len) * d.offset
+    const a = pt(d.x1 + node.x, d.y1 + node.y)
+    const b = pt(d.x2 + node.x, d.y2 + node.y)
+    const a2 = pt(a.x + ox, a.y + oy)
+    const b2 = pt(b.x + ox, b.y + oy)
+    return distToSegment(paper, a2, b2) <= tolerance + 2 || distToSegment(paper, a, a2) <= tolerance || distToSegment(paper, b, b2) <= tolerance
+  }
   const local = paperToLocal(node, paper)
   const frame = textFrame(node)
   if (frame) {
     return local.x >= -tolerance && local.y >= -tolerance && local.x <= frame.w + tolerance && local.y <= frame.h + tolerance
+  }
+  if (node.kind === 'image' || node.symbolId) {
+    const b = commandsBounds(node.commands)
+    if (local.x >= b.x - tolerance && local.y >= b.y - tolerance && local.x <= b.x + b.w + tolerance && local.y <= b.y + b.h + tolerance) return true
   }
   const poly = sampleCommands(node.commands)
   const filled = node.appearance.some((a) => a.kind === 'fill' && a.enabled && a.color.a > 0 && !isNoneColor(a))

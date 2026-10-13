@@ -98,6 +98,35 @@ export function ToolIcon({ name }: { name: string }) {
           <path d="M8 11V6.5a1.5 1.5 0 0 1 3 0V11M11 10V5.5a1.5 1.5 0 0 1 3 0V11M14 10.5V7.5a1.5 1.5 0 0 1 3 0V13c0 4-2 7-6 7-3 0-5-2-6-4l-1.2-2.2a1.4 1.4 0 0 1 2.4-1.4L8 14" />
         </svg>
       )
+    case 'eraser':
+      return (
+        <svg {...common}>
+          <path d="m4 15 8-8 6 6-5 5H9l-5-3Z" />
+          <path d="M9 18h11" />
+        </svg>
+      )
+    case 'scissors':
+      return (
+        <svg {...common}>
+          <circle cx="7" cy="7" r="2.5" />
+          <circle cx="7" cy="17" r="2.5" />
+          <path d="m9 8.5 11 7M9 15.5l11-7" />
+        </svg>
+      )
+    case 'addAnchor':
+      return (
+        <svg {...common}>
+          <path d="M4 16c4-8 12-8 16 0" />
+          <path d="M12 7v6M9 10h6" />
+        </svg>
+      )
+    case 'gradient':
+      return (
+        <svg {...common}>
+          <rect x="4" y="5" width="16" height="14" rx="1" />
+          <path d="M8 5v14M12 5v14M16 5v14" opacity="0.5" />
+        </svg>
+      )
     default:
       return (
         <svg {...common}>

@@ -3,7 +3,8 @@ import { cssColor, toRgb } from './color'
 import { commandsBounds, paperBounds } from './geometry'
 import type { Doc, SceneNode } from './types'
 import { eachNode } from './factory'
-import { InputError } from './units'
+import { labelAnchor, labelText, placedLabels } from './labels'
+import { formatWorldLength, InputError, paperPointsToWorldInches } from './units'
 
 export interface ExportOptions {
   include: 'canvas' | 'objects' | 'selection'
@@ -60,15 +61,36 @@ export function exportSvg(doc: Doc, options: ExportOptions): string {
   const minY = 'maxY' in box ? box.y : 0
   const width = 'maxX' in box ? Math.max(1, box.maxX - box.x) : doc.canvas.width
   const height = 'maxY' in box ? Math.max(1, box.maxY - box.y) : doc.canvas.height
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
   const shapes = nodes
-    .filter((node) => node.kind !== 'dimension')
     .map((node) => {
       const fill = node.appearance.find((a) => a.kind === 'fill' && a.enabled)
       const stroke = node.appearance.find((a) => a.kind === 'stroke' && a.enabled)
       const fillCss = fill && fill.kind === 'fill' && fill.color.a > 0 ? cssColor(fill.color) : 'none'
       const strokeCss = stroke && stroke.kind === 'stroke' ? cssColor(stroke.color) : 'none'
       const sw = stroke && stroke.kind === 'stroke' ? stroke.width : 0
-      return `<g transform="translate(${node.x} ${node.y}) rotate(${(node.rotation * 180) / Math.PI})"><path d="${pathD(node)}" fill="${fillCss}" stroke="${strokeCss}" stroke-width="${sw}"/></g>`
+      const dash = stroke && stroke.kind === 'stroke' && stroke.dash.length ? ` stroke-dasharray="${stroke.dash.join(' ')}"` : ''
+      const labels = placedLabels(node)
+        .map(({ label, stackIndex }) => {
+          const anchor = labelAnchor(node, label, stackIndex)
+          const text = labelText(node, label, doc.canvas)
+          const rotate = anchor.angle ? ` rotate(${(anchor.angle * 180) / Math.PI} ${anchor.x} ${anchor.y})` : ''
+          return `<text x="${anchor.x}" y="${anchor.y}" transform="${rotate.trim()}" font-size="12" font-family="sans-serif" text-anchor="middle" fill="#1c2430">${escape(text)}</text>`
+        })
+        .join('')
+      if (node.kind === 'dimension' && node.dimension) {
+        const d = node.dimension
+        const len = Math.hypot(d.x2 - d.x1, d.y2 - d.y1) || 1
+        const ox = (-(d.y2 - d.y1) / len) * d.offset
+        const oy = ((d.x2 - d.x1) / len) * d.offset
+        const text = formatWorldLength(paperPointsToWorldInches(len, doc.canvas.realInchesPerPoint), doc.canvas.labelUnit, doc.canvas.precision, doc.canvas.showUnits)
+        return `<g transform="translate(${node.x} ${node.y})" stroke="${doc.canvas.selectionColor}" fill="none" stroke-width="1"><path d="M ${d.x1} ${d.y1} L ${d.x1 + ox} ${d.y1 + oy} M ${d.x2} ${d.y2} L ${d.x2 + ox} ${d.y2 + oy} M ${d.x1 + ox} ${d.y1 + oy} L ${d.x2 + ox} ${d.y2 + oy}"/><text x="${(d.x1 + d.x2) / 2 + ox}" y="${(d.y1 + d.y2) / 2 + oy - 4}" font-size="12" font-family="sans-serif" text-anchor="middle" stroke="none" fill="${doc.canvas.selectionColor}">${escape(text)}</text></g>`
+      }
+      if (node.kind === 'text' && node.text) {
+        const color = cssColor(node.text.color ?? { space: 'rgb', r: 28, g: 36, b: 48, a: 1 })
+        return `<g transform="translate(${node.x} ${node.y}) rotate(${(node.rotation * 180) / Math.PI})"><text x="0" y="${node.text.fontSize}" font-size="${node.text.fontSize}" font-family="${escape(node.text.fontFamily)}" font-style="${node.text.fontStyle.includes('italic') ? 'italic' : 'normal'}" font-weight="${node.text.fontStyle.includes('bold') ? 'bold' : 'normal'}" fill="${color}">${escape(node.text.content)}</text>${labels}</g>`
+      }
+      return `<g transform="translate(${node.x} ${node.y}) rotate(${(node.rotation * 180) / Math.PI})" opacity="${node.opacity}"><path d="${pathD(node)}" fill="${fillCss}" stroke="${strokeCss}" stroke-width="${sw}"${dash}/>${labels}</g>`
     })
     .join('')
   const background =

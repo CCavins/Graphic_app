@@ -74,20 +74,85 @@ export function hslToRgb(h: number, s: number, l: number, a = 1): RGB {
   return rgb(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255), a)
 }
 
-export function adjustColor(
-  color: Color,
-  method: 'hue' | 'balance' | 'brightness',
-  amount: number,
-): Color {
+export type AdjustMethod = 'hue' | 'saturation' | 'balance' | 'brightness' | 'contrast'
+
+const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value))
+
+export function adjustColor(color: Color, method: AdjustMethod, amount: number): Color {
   const base = toRgb(color)
-  const hsl = rgbToHsl(base)
-  if (method === 'hue') hsl.h = (hsl.h + amount) % 1
+  let next: RGB
   if (method === 'balance') {
-    hsl.s = Math.max(0, Math.min(1, hsl.s + amount))
+    // Warm (positive) or cool (negative) shift.
+    next = rgb(clamp(Math.round(base.r + amount * 80), 0, 255), base.g, clamp(Math.round(base.b - amount * 80), 0, 255), base.a)
+  } else if (method === 'contrast') {
+    const k = 1 + amount
+    next = rgb(
+      clamp(Math.round(128 + (base.r - 128) * k), 0, 255),
+      clamp(Math.round(128 + (base.g - 128) * k), 0, 255),
+      clamp(Math.round(128 + (base.b - 128) * k), 0, 255),
+      base.a,
+    )
+  } else {
+    const hsl = rgbToHsl(base)
+    if (method === 'hue') hsl.h = (((hsl.h + amount) % 1) + 1) % 1
+    if (method === 'saturation') hsl.s = clamp(hsl.s + amount)
+    if (method === 'brightness') hsl.l = clamp(hsl.l + amount)
+    next = hslToRgb(hsl.h, hsl.s, hsl.l, base.a)
   }
-  if (method === 'brightness') hsl.l = Math.max(0, Math.min(1, hsl.l + amount))
-  const next = hslToRgb(hsl.h, hsl.s, hsl.l, base.a)
-  return color.space === 'cmyk' ? { ...color, a: next.a } : next
+  return color.space === 'cmyk' ? rgbToCmyk(next) : next
+}
+
+export function rgbToCmyk(color: RGB): Color {
+  const r = color.r / 255
+  const g = color.g / 255
+  const b = color.b / 255
+  const k = 1 - Math.max(r, g, b)
+  if (k >= 1) return cmyk(0, 0, 0, 1, color.a)
+  return cmyk((1 - r - k) / (1 - k), (1 - g - k) / (1 - k), (1 - b - k) / (1 - k), k, color.a)
+}
+
+export function toHex(color: Color): string {
+  const c = toRgb(color)
+  const part = (value: number) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, '0')
+  return `#${part(c.r)}${part(c.g)}${part(c.b)}`
+}
+
+export function fromHex(hex: string, alpha = 1): RGB | null {
+  const clean = hex.trim().replace(/^#/, '')
+  const full = clean.length === 3 ? clean.split('').map((ch) => ch + ch).join('') : clean
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null
+  return rgb(parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16), alpha)
+}
+
+export function rgbToHsb(color: RGB): { h: number; s: number; b: number } {
+  const r = color.r / 255
+  const g = color.g / 255
+  const b = color.b / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const d = max - min
+  let h = 0
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h = ((h * 60) % 360 + 360) % 360
+  }
+  return { h, s: max === 0 ? 0 : d / max, b: max }
+}
+
+export function hsbToRgb(h: number, s: number, b: number, alpha = 1): RGB {
+  const c = b * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = b - c
+  let [r, g, bl] = [0, 0, 0]
+  if (h < 60) [r, g, bl] = [c, x, 0]
+  else if (h < 120) [r, g, bl] = [x, c, 0]
+  else if (h < 180) [r, g, bl] = [0, c, x]
+  else if (h < 240) [r, g, bl] = [0, x, c]
+  else if (h < 300) [r, g, bl] = [x, 0, c]
+  else [r, g, bl] = [c, 0, x]
+  return rgb(Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((bl + m) * 255), alpha)
 }
 
 export function colorsEqual(a: Color, b: Color): boolean {

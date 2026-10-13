@@ -1,173 +1,168 @@
-import { rectCommands } from '../model/geometry'
+import { cmd, commandsBounds, ellipseCommands, polygonCommands, rectCommands, scaleCommands, translateCommands } from '../model/geometry'
 import type { Cmd } from '../model/types'
 
 export interface CatalogItem {
   id: string
   name: string
+  /** Library name, matching Graphic's library list: Floor Plans, Symbols, App Mockups, Numbers, Custom. */
+  library: string
   category: string
   tags: string[]
   aliases: string[]
+  /** Real-world size in inches. */
   worldWidth: number
   worldHeight: number
+  /** Path in world inches with the top-left corner at 0,0. */
   commands: Cmd[]
+  /** Optional label placed in the middle of the symbol (used by the Numbers library). */
+  text?: string
+  source?: 'drawio' | 'floorplansvg' | 'generated' | 'custom'
 }
 
-const items: CatalogItem[] = []
+interface RawSymbol {
+  id: string
+  name: string
+  lib: string
+  cat: string
+  tags: string[]
+  s: number
+  w: number
+  h: number
+  d: string
+  src: 'drawio' | 'floorplansvg'
+}
 
-function add(
-  category: string,
-  name: string,
-  tags: string[],
-  worldWidth: number,
-  worldHeight: number,
-  aliases: string[] = [],
-): void {
-  const commands = rectCommands(worldWidth, worldHeight)
-  if (worldWidth > 4 && worldHeight > 4) {
-    const inset = Math.min(worldWidth, worldHeight) * 0.08
-    commands.push(
-      ...rectCommands(worldWidth - inset * 2, worldHeight - inset * 2).map((command) => ({
-        ...command,
-        x: command.c === 'Z' ? command.x : command.x + inset,
-        y: command.c === 'Z' ? command.y : command.y + inset,
-      })),
-    )
+export const LIBRARIES = ['Floor Plans', 'Symbols', 'App Mockups', 'Numbers'] as const
+
+/** Parse the compact path string stored in symbols.json into commands, scaled by `scale`. */
+export function parsePathData(d: string, scale = 1): Cmd[] {
+  const out: Cmd[] = []
+  const re = /([MLCZ])((?:\s*-?\d*\.?\d+)*)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(d))) {
+    const nums = match[2].trim().split(/\s+/).filter(Boolean).map((value) => Number(value) * scale)
+    if (match[1] === 'M') out.push(cmd('M', nums[0], nums[1]))
+    else if (match[1] === 'L') out.push(cmd('L', nums[0], nums[1]))
+    else if (match[1] === 'C') out.push(cmd('C', nums[4], nums[5], nums[0], nums[1], nums[2], nums[3]))
+    else out.push(cmd('Z'))
   }
-  items.push({
-    id: `${category}-${items.length + 1}`,
-    name,
-    category,
-    tags,
-    aliases,
-    worldWidth,
-    worldHeight,
-    commands,
+  return out
+}
+
+function fromRaw(raw: RawSymbol): CatalogItem {
+  let parsed: Cmd[] | null = null
+  const item: CatalogItem = {
+    id: raw.id,
+    name: raw.name,
+    library: raw.lib,
+    category: raw.cat,
+    tags: raw.tags,
+    aliases: [],
+    worldWidth: Math.max(0.05, raw.w * raw.s),
+    worldHeight: Math.max(0.05, raw.h * raw.s),
+    commands: [],
+    source: raw.src,
+  }
+  Object.defineProperty(item, 'commands', {
+    enumerable: true,
+    get() {
+      if (!parsed) parsed = parsePathData(raw.d, raw.s)
+      return parsed
+    },
   })
+  return item
 }
 
-function grid(
-  category: string,
-  label: string,
-  tags: string[],
-  widths: number[],
-  heights: number[],
-  unit = 'in',
-): void {
-  for (const width of widths) {
-    for (const height of heights) {
-      add(category, `${label} ${width} x ${height} ${unit}`, [...tags, label.toLowerCase(), `${width}`, `${height}`, unit], width, height, [
-        label.toLowerCase(),
-      ])
-    }
-  }
+/** Stretch commands so their bounds fill a size × size box. */
+function fit(commands: Cmd[], size: number): Cmd[] {
+  const bounds = commandsBounds(commands)
+  return scaleCommands(translateCommands(commands, -bounds.x, -bounds.y), size / (bounds.w || 1), size / (bounds.h || 1))
 }
 
-function range(start: number, end: number, step: number): number[] {
-  const values: number[] = []
-  for (let value = start; value <= end + 1e-6; value += step) values.push(Math.round(value * 100) / 100)
-  return values
-}
-
-function build(): CatalogItem[] {
-  if (items.length) return items
-  const diagonals = [24, 27, 32, 40, 43, 48, 50, 55, 65, 75, 77, 83, 85, 98]
-  const aspects: [string, number][] = [
-    ['16:9', 9 / 16],
-    ['21:9', 9 / 21],
-    ['4:3', 3 / 4],
-    ['32:9', 9 / 32],
+/** Numbered markers, like Graphic's Numbers library: a shape with a centered number. */
+function numbers(): CatalogItem[] {
+  const items: CatalogItem[] = []
+  const shapes: [string, (size: number) => Cmd[]][] = [
+    ['Circle', (size) => ellipseCommands(size, size)],
+    ['Square', (size) => rectCommands(size, size)],
+    ['Rounded', (size) => rectCommands(size, size, size * 0.25)],
+    ['Hexagon', (size) => fit(polygonCommands(size, size, 6), size)],
+    ['Diamond', (size) => fit(polygonCommands(size, size, 4), size)],
   ]
-  const displayTypes = ['TV', 'Monitor', 'Laptop', 'Tablet', 'Projector']
-  for (const diagonal of diagonals) {
-    for (const [aspect, ratio] of aspects) {
-      for (const type of displayTypes) {
-        const width = (diagonal * 16) / Math.hypot(16, 16 * ratio)
-        const height = width * ratio
-        const w = Math.round(width * 10) / 10
-        const h = Math.round(height * 10) / 10
-        add('Displays', `${diagonal} in ${type} ${aspect}`, ['display', type.toLowerCase(), aspect, `${diagonal}`, 'screen'], w, h, [
-          'tv',
-          'monitor',
-          'screen',
-        ])
-      }
-    }
-  }
-  const doorWidths = [24, 28, 30, 32, 36, 42]
-  const doorHeights = [80, 84, 96]
-  const hands = ['left', 'right']
-  const doorTypes = ['single', 'double', 'pocket', 'barn', 'sliding']
-  for (const width of doorWidths) {
-    for (const height of doorHeights) {
-      for (const hand of hands) {
-        for (const type of doorTypes) {
-          add('Openings', `${type} door ${width} x ${height} ${hand}`, ['door', type, hand, 'opening', `${width}`], width, height)
-        }
-      }
-    }
-  }
-  grid('Openings', 'Window', ['window', 'opening'], range(12, 72, 6), range(12, 60, 12))
-  grid('Furniture', 'Table', ['table', 'furniture'], range(36, 96, 12), range(24, 48, 6))
-  grid('Furniture', 'Chair', ['chair', 'seating'], range(18, 30, 2), range(18, 24, 2))
-  grid('Furniture', 'Sofa', ['sofa', 'seating'], range(60, 120, 12), [32, 36, 40])
-  grid('Furniture', 'Bed', ['bed', 'furniture'], [38, 54, 60, 76, 80], [75, 80])
-  grid('Kitchen', 'Base cabinet', ['cabinet', 'kitchen', 'base'], range(9, 48, 3), [24, 34.5])
-  grid('Kitchen', 'Wall cabinet', ['cabinet', 'kitchen', 'wall'], range(9, 48, 3), [12, 18, 24, 30, 42])
-  grid('Appliances', 'Appliance', ['appliance'], [24, 30, 36, 48], [24, 27, 36, 70])
-  grid('Bath', 'Fixture', ['bath', 'fixture'], [15, 18, 24, 30, 36, 48, 60], [15, 18, 30, 32, 60])
-  grid('Circulation', 'Stair', ['stair', 'steps'], range(36, 60, 6), range(36, 120, 12))
-  grid('Structure', 'Column', ['column'], range(6, 36, 2), range(6, 36, 2))
-  grid('Landscape', 'Plant', ['plant', 'tree'], range(12, 72, 6), range(12, 72, 12))
-  grid('People', 'Person', ['person', 'figure'], [16, 18, 20, 22], [16, 18, 24])
-  grid('Vehicles', 'Vehicle', ['vehicle', 'car'], [72, 84, 96, 180, 240], [36, 48, 72, 96])
-  grid('Lighting', 'Light', ['light', 'lamp'], range(6, 48, 6), range(6, 24, 6))
-  grid('HVAC', 'Diffuser', ['hvac', 'diffuser'], range(6, 36, 6), range(6, 24, 6))
-  const electrical = ['outlet', 'switch', 'panel', 'data', 'speaker', 'camera', 'thermostat', 'smoke']
-  for (const name of electrical) {
-    for (const size of [4, 6, 8]) add('Electrical', `${name} ${size} in`, ['electrical', name, 'symbol'], size, size)
-  }
-  grid('Annotation', 'Arrow', ['arrow', 'annotation'], range(12, 72, 12), [4, 8, 12])
-  grid('Diagrams', 'Flow node', ['flowchart', 'diagram'], [40, 80, 120, 160], [24, 40, 64])
-  grid('Mockups', 'Button', ['button', 'ui', 'mockup'], range(40, 160, 20), [24, 32, 44])
-  grid('Mockups', 'Field', ['field', 'input', 'ui'], range(80, 320, 40), [28, 36, 44])
-  grid('Mockups', 'Card', ['card', 'ui'], range(80, 240, 40), range(60, 180, 40))
-  const devices: [string, number, number][] = [
-    ['phone', 2.8, 5.8],
-    ['phone large', 3.1, 6.4],
-    ['tablet', 7.8, 10.2],
-    ['tablet large', 8.3, 11.5],
-    ['laptop 13', 11.9, 8.2],
-    ['laptop 16', 14, 9.6],
-  ]
-  for (const [name, w, h] of devices) {
-    add('Mockups', `${name} frame portrait`, ['device', 'frame', 'mockup', name], w, h)
-    add('Mockups', `${name} frame landscape`, ['device', 'frame', 'mockup', name], h, w)
-  }
-  grid('Mockups', 'Navigation bar', ['nav', 'ui'], range(320, 1440, 160), [44, 56, 64])
-  grid('Annotation', 'Scale bar', ['scale', 'annotation'], range(24, 120, 12), [8, 12])
-  grid('Storage', 'Shelf', ['shelf', 'storage'], range(12, 72, 6), range(12, 84, 12))
-  grid('Furniture', 'Rug', ['rug', 'furniture'], range(36, 120, 12), range(24, 96, 12))
-  grid('Furniture', 'Desk', ['desk', 'office'], range(48, 84, 6), range(24, 36, 6))
-  grid('Walls', 'Wall segment', ['wall', 'plan'], range(6, 240, 6), [4, 6, 8])
-  grid('Panels', 'Panel', ['panel'], range(6, 48, 2), range(12, 96, 12))
-  grid('Seating', 'Bench', ['bench', 'seating'], range(36, 96, 6), [16, 18, 20, 24])
-  grid('Storage', 'Drawer bank', ['drawer', 'storage'], range(12, 60, 3), range(12, 36, 6))
-  const marks = ['north', 'section', 'break', 'revision', 'title', 'callout', 'level', 'datum']
-  for (const mark of marks) {
-    for (const size of range(8, 64, 4)) {
-      add('Annotation', `${mark} mark ${size}`, ['annotation', mark, 'symbol', `${size}`], size, size)
+  for (const [shape, build] of shapes) {
+    for (let value = 1; value <= 40; value++) {
+      items.push({
+        id: `numbers-${shape.toLowerCase()}-${value}`,
+        name: `${shape} ${value}`,
+        library: 'Numbers',
+        category: `Numbers ${shape}`,
+        tags: ['number', 'marker', 'badge', shape.toLowerCase(), String(value)],
+        aliases: ['callout', 'bubble'],
+        worldWidth: 0.5,
+        worldHeight: 0.5,
+        commands: build(0.5),
+        text: String(value),
+        source: 'generated',
+      })
     }
   }
   return items
 }
 
-export const CATALOG: CatalogItem[] = build()
+/** Items available right away. Imported symbols are appended by `loadCatalog`. */
+export const CATALOG: CatalogItem[] = numbers()
 
-export function searchCatalog(source: CatalogItem[], query: string): CatalogItem[] {
-  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
-  if (!terms.length) return source
-  return source.filter((item) => {
-    const hay = `${item.name} ${item.category} ${item.tags.join(' ')} ${item.aliases.join(' ')} ${item.worldWidth} ${item.worldHeight}`.toLowerCase()
-    return terms.every((term) => hay.includes(term))
-  })
+let loading: Promise<CatalogItem[]> | null = null
+let loaded = false
+
+export function catalogLoaded(): boolean {
+  return loaded
 }
+
+/** Load the imported draw.io and FloorPlanSVGSymbols sets. Safe to call more than once. */
+export function loadCatalog(): Promise<CatalogItem[]> {
+  if (!loading) {
+    loading = import('./symbols.json').then((module) => {
+      const raw = (module.default ?? module) as unknown as RawSymbol[]
+      const known = new Set(CATALOG.map((item) => item.id))
+      for (const entry of raw) {
+        if (known.has(entry.id)) continue
+        known.add(entry.id)
+        CATALOG.push(fromRaw(entry))
+      }
+      loaded = true
+      return CATALOG
+    })
+  }
+  return loading
+}
+
+export function searchCatalog(source: CatalogItem[], query: string, library?: string): CatalogItem[] {
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
+  const scoped = library ? source.filter((item) => item.library === library) : source
+  if (!terms.length) return scoped
+  // Rank whole-word name matches ("Single Door") above substring hits ("Outdoor") and tag-only hits.
+  const scored: { item: CatalogItem; score: number }[] = []
+  for (const item of scoped) {
+    const name = item.name.toLowerCase()
+    const nameWords = name.split(/[\s/-]+/)
+    const hay = `${name} ${item.category} ${item.library} ${item.tags.join(' ')} ${item.aliases.join(' ')}`.toLowerCase()
+    let score = 0
+    let ok = true
+    for (const term of terms) {
+      if (!hay.includes(term)) {
+        ok = false
+        break
+      }
+      if (name === term) score += 8
+      else if (nameWords.includes(term)) score += 4
+      else if (nameWords.some((word) => word.startsWith(term))) score += 3
+      else if (name.includes(term)) score += 1
+    }
+    if (ok) scored.push({ item, score: score - name.length / 1000 })
+  }
+  return scored.sort((a, b) => b.score - a.score).map((entry) => entry.item)
+}
+
+export const CATALOG_ATTRIBUTION =
+  'Symbol shapes: draw.io stencils © JGraph Ltd (CC BY 4.0) and FloorPlanSVGSymbols © 1337GameDev (MIT). See src/catalog/data/NOTICE.'
