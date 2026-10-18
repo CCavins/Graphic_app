@@ -863,7 +863,11 @@ export class Editor {
         return
       }
       this.place(this.tool === 'text' ? this.preview : this.paintNew(this.preview))
-      if (this.tool === 'text') this.editText(this.selection[0])
+      if (this.tool === 'text') {
+        this.editText(this.selection[0])
+        // Typing into a box that was just made belongs to the same undo step as making it.
+        this.textUndoArmed = true
+      }
       this.preview = null
       this.pen = []
     }

@@ -1929,6 +1929,18 @@ Object.assign(cases, {
     manual.setBaseUnit('cm')
     expect(manual.doc.canvas.labelUnit).toBe('yd')
   },
+  'text-create-one-undo'() {
+    const app = editor()
+    app.setTool('text')
+    app.pointerDown(pointer(100, 100))
+    app.pointerUp(pointer(100, 100))
+    expect(app.editingTextId).toBeTruthy()
+    app.setTextContent('Kitchen')
+    expect(app.doc.layers[0].children[0].text?.content).toBe('Kitchen')
+    app.stopTextEdit()
+    app.undo()
+    expect(app.doc.layers[0].children.length).toBe(0)
+  },
   'mask-feedback'() {
     const app = editor()
     const node = makeRect(0, 0, 10, 10)
