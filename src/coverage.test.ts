@@ -20,6 +20,8 @@ import { fromHex, hsbToRgb, rgb, rgbToCmyk, rgbToHsb, toHex } from './model/colo
 import { PRESETS } from './model/factory'
 import { SHORTCUTS, TOOL_KEYS } from './input/shortcuts'
 import { TOOL_INFO, TOOL_NAMES, TOOLS } from './app/toolInfo'
+import { bodyHtml, renderDocsPage } from './help/docs'
+import { findTopic, MANUAL, searchManual } from './help/manual'
 
 const pointer = (cx: number, cy: number, extra: Record<string, unknown> = {}) => ({
   cx,
@@ -1794,6 +1796,31 @@ Object.assign(cases, {
     expect(TOOL_INFO.roundRect.name).toBe('Rounded rectangle')
     expect(TOOL_INFO.select.name).toBe('Select')
     expect(TOOL_INFO.pathSelect.name).toBe('Direct select')
+  },
+  'help-manual-complete'() {
+    // Every tool and every pane has a topic; ids are unique; search finds things by plain words.
+    const ids = MANUAL.flatMap((section) => section.topics.map((topic) => topic.id))
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const tool of TOOLS) expect(findTopic(`tool-${tool}`)?.title).toContain(TOOL_INFO[tool].name)
+    for (const pane of ['Properties', 'Appearance', 'Layers', 'Libraries']) expect(MANUAL.some((section) => section.title.startsWith(pane))).toBe(true)
+    for (const section of MANUAL) for (const topic of section.topics) {
+      expect(topic.summary.length, topic.id).toBeGreaterThan(10)
+      expect(topic.body.length, topic.id).toBeGreaterThan(0)
+    }
+    const hits = searchManual('arrow')
+    expect(hits.flatMap((section) => section.topics.map((topic) => topic.id))).toEqual(expect.arrayContaining(['tool-line', 'options-line', 'app-stroke']))
+    expect(searchManual('scale real').flatMap((section) => section.topics.map((topic) => topic.id))).toContain('start-scale')
+    expect(searchManual('xyzzy-nothing')).toEqual([])
+    expect(searchManual('   ')).toBe(MANUAL)
+  },
+  'help-docs-page'() {
+    const html = renderDocsPage('../')
+    expect(html).toContain('<!doctype html>')
+    expect(html).toContain('Measured – User manual')
+    for (const section of MANUAL) for (const topic of section.topics) expect(html).toContain(`id="${topic.id}"`)
+    // Lists and paragraphs render; text is escaped.
+    expect(bodyHtml(['- a', '- b', 'c', '1. d'])).toBe('<ul><li>a</li><li>b</li></ul>\n<p>c</p>\n<ol><li>d</li></ol>')
+    expect(bodyHtml(['<b>'])).toBe('<p>&lt;b&gt;</p>')
   },
 })
 

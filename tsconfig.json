@@ -16,5 +16,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "qa", "e2e"]
+  "include": ["src", "qa", "e2e", "scripts"]
 }

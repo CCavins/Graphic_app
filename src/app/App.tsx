@@ -33,6 +33,11 @@ export function App() {
   const [open, setOpen] = useState<Record<Pane, boolean>>({ Properties: true, Appearance: true, Layers: false, Libraries: false })
   const [sheet, setSheet] = useState<Pane | null>(null)
   const [dialog, setDialog] = useState<DialogName>(null)
+  const [helpTopic, setHelpTopic] = useState<string | undefined>(undefined)
+  const openHelp = (topic?: string) => {
+    setHelpTopic(topic)
+    setDialog('help')
+  }
 
   useEffect(() => editor.subscribe(() => setTick((value) => value + 1)), [])
 
@@ -306,6 +311,13 @@ export function App() {
           />
         )}
         <div className="readout" data-testid="readout" style={{ left: RULER_SIZE + 8, top: RULER_SIZE + 8 }}>{editor.readout}</div>
+        {!editor.documentHasContent() && !editor.preview && editor.pen.length === 0 && (
+          <div className="empty-hint" data-testid="empty-hint">
+            Pick a tool on the {narrow ? 'bottom' : 'left'} and drag on the page to draw.
+            <br />
+            Try <kbd>R</kbd> for a rectangle or <kbd>P</kbd> for the pen. <button className="link" onClick={() => openHelp('start-first-drawing')}>Open Help</button>
+          </div>
+        )}
         {editor.banner && (
           <div className="banner" data-testid="banner" role="status">
             {editor.banner}
@@ -319,7 +331,7 @@ export function App() {
             <button className="chip" data-active={editor.touchMods.duplicate} onClick={() => { editor.touchMods.duplicate = !editor.touchMods.duplicate; editor.emit() }}>Duplicate</button>
           </div>
         )}
-        {editor.context && <ContextMenu stage={stageRef.current} />}
+        {editor.context && <ContextMenu stage={stageRef.current} onHelp={() => openHelp('files-context-menu')} />}
       </div>
       <aside className="inspector" data-testid="inspector" data-sheet={narrow ? (sheet ? 'open' : 'closed') : undefined}>
         <div className="pane-tabs">
@@ -354,7 +366,7 @@ export function App() {
       {dialog === 'recolor' && <RecolorDialog onClose={closeDialog} />}
       {dialog === 'similar' && <SelectSimilarDialog onClose={closeDialog} />}
       {dialog === 'plugins' && <PluginsDialog onClose={closeDialog} />}
-      {dialog === 'help' && <HelpDialog onClose={closeDialog} />}
+      {dialog === 'help' && <HelpDialog onClose={closeDialog} topic={helpTopic} />}
     </div>
   )
 }
@@ -441,7 +453,7 @@ function FileButtons({ onOpen, onDialog }: { onOpen: () => void; onDialog: (name
   )
 }
 
-function ContextMenu({ stage }: { stage: HTMLDivElement | null }) {
+function ContextMenu({ stage, onHelp }: { stage: HTMLDivElement | null; onHelp: () => void }) {
   const context = editor.context
   if (!context) return null
   const close = () => {
@@ -492,6 +504,8 @@ function ContextMenu({ stage }: { stage: HTMLDivElement | null }) {
       <button disabled={!has} onClick={run(() => editor.addLabel('size'))}>Add size label</button>
       <button disabled={!has} onClick={run(() => editor.deleteSelection())}>Delete</button>
       <button onClick={run(() => editor.selectAll())}>Select all</button>
+      <hr />
+      <button data-testid="menu-help" onClick={run(onHelp)}>Help…</button>
     </div>
   )
 }

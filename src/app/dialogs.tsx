@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { LIMITATIONS } from '../editor/editor'
-import { SHORTCUTS } from '../input/shortcuts'
-import { TOOL_INFO, TOOLS } from './toolInfo'
+import { findTopic, searchManual } from '../help/manual'
 import type { AdjustMethod } from '../model/color'
 import { exportPsd, exportTiff } from '../model/export'
 import { PRESETS, type NewDocumentOptions } from '../model/factory'
@@ -310,31 +309,83 @@ export function PluginsDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-export function HelpDialog({ onClose }: { onClose: () => void }) {
+export function HelpDialog({ onClose, topic }: { onClose: () => void; topic?: string }) {
+  const [query, setQuery] = useState('')
+  const [current, setCurrent] = useState<string | null>(topic ?? null)
+  const sections = searchManual(query)
+  const open = current ? findTopic(current) : null
+  const listed = sections.flatMap((section) => section.topics)
+  // While searching, show the first hit when the chosen topic is filtered out.
+  const shown = open && listed.some((item) => item.id === open.id) ? open : listed[0]
   return (
-    <Dialog title="Shortcuts and browser limits" onClose={onClose} testId="help-dialog" wide>
-      <div className="two-col">
-        <div data-testid="shortcuts">
-          <h4>Tools</h4>
-          {TOOLS.map((tool) => (
-            <div key={tool} className="shortcut">
-              <kbd>{TOOL_INFO[tool].shortcut ?? '–'}</kbd> {TOOL_INFO[tool].name}
-            </div>
-          ))}
-          <h4>Shortcuts</h4>
-          {SHORTCUTS.map((item) => (
-            <div key={item.keys} className="shortcut" data-reserved={item.reserved}>
-              <kbd>{item.keys}</kbd> {item.action}
-            </div>
-          ))}
-        </div>
-        <div data-testid="limitations">
-          <h4>Not available in the browser</h4>
-          {Object.entries(LIMITATIONS).map(([key, text]) => (
-            <p key={key}>{text}</p>
-          ))}
-        </div>
+    <Dialog title="Help" onClose={onClose} testId="help-dialog" wide>
+      <div className="help">
+        <nav className="help-nav">
+          <input
+            className="help-search"
+            data-testid="help-search"
+            type="search"
+            placeholder="Search help (e.g. scale, arrow, export)"
+            value={query}
+            autoFocus
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <div className="help-list" data-testid="help-list">
+            {sections.length === 0 && <p className="hint">No topics match “{query}”. Try a tool or panel name.</p>}
+            {sections.map((section) => (
+              <div key={section.id} className="help-section">
+                <h4>{section.title}</h4>
+                {section.topics.map((item) => (
+                  <button key={item.id} className="help-topic" data-testid={`help-topic-${item.id}`} data-active={shown?.id === item.id} onClick={() => setCurrent(item.id)}>
+                    {item.title}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          <a className="help-docs" href="help/" target="_blank" rel="noreferrer" data-testid="help-docs-link">
+            Open the full manual in a new tab ↗
+          </a>
+        </nav>
+        <article className="help-body" data-testid="help-body">
+          {shown ? (
+            <>
+              <h3>{shown.title}</h3>
+              <p className="help-summary">{shown.summary}</p>
+              <HelpBody lines={shown.body} />
+            </>
+          ) : (
+            <p className="hint">Pick a topic on the left.</p>
+          )}
+        </article>
       </div>
     </Dialog>
   )
+}
+
+/** Renders manual paragraphs; consecutive "- " lines become one list, "1. " lines an ordered list. */
+function HelpBody({ lines }: { lines: string[] }) {
+  const blocks: ReactNode[] = []
+  let list: { ordered: boolean; items: string[] } | null = null
+  const flush = () => {
+    if (!list) return
+    const items = list.items.map((item, i) => <li key={i}>{item}</li>)
+    blocks.push(list.ordered ? <ol key={blocks.length}>{items}</ol> : <ul key={blocks.length}>{items}</ul>)
+    list = null
+  }
+  for (const line of lines) {
+    const bullet = line.match(/^- (.*)$/)
+    const numbered = line.match(/^\d+\. (.*)$/)
+    if (bullet || numbered) {
+      const ordered = !!numbered
+      if (list && list.ordered !== ordered) flush()
+      if (!list) list = { ordered, items: [] }
+      list.items.push((bullet ?? numbered)![1])
+    } else {
+      flush()
+      blocks.push(<p key={blocks.length}>{line}</p>)
+    }
+  }
+  flush()
+  return <>{blocks}</>
 }

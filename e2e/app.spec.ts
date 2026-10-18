@@ -388,3 +388,52 @@ test('export svg from the dialog', async ({ page }) => {
   const { readFileSync } = await import('node:fs')
   expect(readFileSync(path!, 'utf8')).toContain('<svg')
 })
+
+test('help is searchable and opens from ?, the context menu, and the empty-canvas hint (help-manual, help-search, context-menu-help, empty-hint)', async ({ page }) => {
+  await page.goto('./')
+  // Empty canvas shows a hint that links into Help.
+  const hint = page.getByTestId('empty-hint')
+  await expect(hint).toBeVisible()
+  await hint.getByRole('button', { name: 'Open Help' }).click()
+  const dialog = page.getByTestId('help-dialog')
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('help-body')).toContainText('Your first drawing')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+
+  // The ? button opens the guide; search narrows the topic list.
+  await page.getByTestId('help-open').click()
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('help-topic-tool-pen')).toBeVisible()
+  await expect(page.getByTestId('help-topic-props-canvas')).toBeVisible()
+  await page.getByTestId('help-search').fill('dimension line')
+  await expect(page.getByTestId('help-topic-tool-line')).toBeVisible()
+  await expect(page.getByTestId('help-topic-tool-pen')).toHaveCount(0)
+  await page.getByTestId('help-topic-options-line').click()
+  await expect(page.getByTestId('help-body')).toContainText('engineering-style measured line')
+  await page.getByTestId('help-search').fill('zzzz')
+  await expect(page.getByTestId('help-list')).toContainText('No topics match')
+  // Typing in the search box does not trigger tool shortcuts.
+  await expect(page.getByTestId('active-tool')).toHaveText('Select')
+  await expect(page.getByTestId('help-docs-link')).toHaveAttribute('href', 'help/')
+  await page.keyboard.press('Escape')
+
+  // Drawing hides the hint; the context menu has a Help entry.
+  await drawRect(page)
+  await expect(hint).toHaveCount(0)
+  const box = (await page.getByTestId('canvas').boundingBox())!
+  await page.mouse.click(box.x + 300, box.y + 300, { button: 'right' })
+  await page.getByTestId('menu-help').click()
+  await expect(dialog).toBeVisible()
+  await expect(page.getByTestId('help-body')).toContainText('Right-click')
+})
+
+test('the docs page is published beside the app (help-docs-page)', async ({ page }) => {
+  await page.goto('./help/')
+  await expect(page).toHaveTitle(/User manual/)
+  await expect(page.locator('#tool-pen')).toBeVisible()
+  await page.locator('#q').fill('rounded')
+  await expect(page.locator('#tool-roundRect')).toBeVisible()
+  await expect(page.locator('#tool-pen')).toBeHidden()
+  await expect(page.getByRole('link', { name: 'Back to the app' })).toHaveAttribute('href', '../')
+})
