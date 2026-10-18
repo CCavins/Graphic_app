@@ -14,10 +14,16 @@ import { LayersPanel } from './panels/Layers'
 import { LibrariesPanel } from './panels/Libraries'
 import { PropertiesPanel } from './panels/Properties'
 import { TOOL_INFO, TOOLS } from './toolInfo'
-import { ColorWell, InlineName } from './ui'
+import { ColorWell, InlineName, setFieldErrorReporter } from './ui'
 import './styles.css'
 
 const PANES = ['Properties', 'Appearance', 'Layers', 'Libraries'] as const
+
+// A refused field value is explained in the banner as well as by the red outline.
+setFieldErrorReporter((message) => {
+  editor.banner = message
+  editor.emit()
+})
 type Pane = (typeof PANES)[number]
 type DialogName = 'new' | 'export' | 'recolor' | 'similar' | 'plugins' | 'help' | null
 

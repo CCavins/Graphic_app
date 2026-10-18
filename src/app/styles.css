@@ -282,6 +282,11 @@ canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: 
 .field { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
 .field input, .field select { border: 1px solid var(--line); border-radius: 5px; height: 26px; padding: 0 6px; background: white; color: #1c2430; font-size: 13px; }
 .field input:disabled { background: #f1f3f6; }
+.field[data-suffix="true"] { position: relative; }
+.field .suffix { position: absolute; right: 7px; bottom: 6px; font-size: 11px; color: var(--muted); pointer-events: none; }
+.field[data-suffix="true"] input { padding-right: 28px; }
+.field input[aria-invalid="true"],
+.field input[aria-invalid="true"]:focus { border-color: #c2382c; outline: 2px solid rgba(194, 56, 44, 0.45); outline-offset: 0; background: #fff7f6; }
 .check { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 .slider { display: grid; grid-template-columns: 56px 1fr 40px; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
 .slider input { width: 100%; margin: 0; }

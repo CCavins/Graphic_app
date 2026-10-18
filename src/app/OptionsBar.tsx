@@ -1,7 +1,7 @@
 import { dashPresetOf, type ArcMode, type DashPreset, type LineMode } from '../editor/editor'
 import { editor } from './instance'
 import { TOOL_NAMES } from './toolInfo'
-import { Field } from './ui'
+import { Field, numberIn } from './ui'
 
 const FONTS = ['Georgia, serif', 'Helvetica Neue, Helvetica, Arial, sans-serif', 'Avenir Next, Segoe UI, sans-serif', 'Times New Roman, serif', 'Courier New, monospace', 'Futura, Trebuchet MS, sans-serif']
 
@@ -53,15 +53,15 @@ export function OptionsBar() {
         </>
       )}
       {tool === 'roundRect' && (
-        <Field label="Radius" testId="corner-radius" width={56} value={String(editor.cornerRadius)} onCommit={(raw) => { editor.cornerRadius = Math.max(0, Number(raw) || 0); editor.emit() }} />
+        <Field label="Radius" testId="corner-radius" width={56} title="Corner radius in points" value={String(editor.cornerRadius)} validate={numberIn({ min: 0, max: 1000, label: 'Radius' })} onCommit={(raw) => { editor.cornerRadius = Number(raw); editor.emit() }} />
       )}
       {tool === 'polygon' && (
-        <Field label="Sides" testId="polygon-sides" width={48} value={String(editor.polygonSides)} onCommit={(raw) => { editor.polygonSides = Math.max(3, Math.round(Number(raw) || 3)); editor.emit() }} />
+        <Field label="Sides" testId="polygon-sides" width={48} title="Number of sides, 3 to 100" value={String(editor.polygonSides)} validate={numberIn({ min: 3, max: 100, integer: true, label: 'Sides' })} onCommit={(raw) => { editor.polygonSides = Number(raw); editor.emit() }} />
       )}
       {tool === 'star' && (
         <>
-          <Field label="Points" testId="star-points" width={48} value={String(editor.starPoints)} onCommit={(raw) => { editor.starPoints = Math.max(3, Math.round(Number(raw) || 3)); editor.emit() }} />
-          <Field label="Inner %" testId="star-inner" width={56} value={String(Math.round(editor.starInnerRadius * 100))} onCommit={(raw) => { editor.starInnerRadius = Math.min(0.95, Math.max(0.05, (Number(raw) || 40) / 100)); editor.emit() }} />
+          <Field label="Points" testId="star-points" width={48} title="Number of points, 3 to 100" value={String(editor.starPoints)} validate={numberIn({ min: 3, max: 100, integer: true, label: 'Points' })} onCommit={(raw) => { editor.starPoints = Number(raw); editor.emit() }} />
+          <Field label="Inner %" testId="star-inner" width={56} title="Inner radius as a percentage of the outer radius, 5 to 95" value={String(Math.round(editor.starInnerRadius * 100))} validate={numberIn({ min: 5, max: 95, label: 'Inner %' })} onCommit={(raw) => { editor.starInnerRadius = Number(raw.replace(/%$/, '')) / 100; editor.emit() }} />
         </>
       )}
       {tool === 'arc' && (
@@ -76,14 +76,14 @@ export function OptionsBar() {
       )}
       {tool === 'brush' && (
         <>
-          <Field label="Diameter" testId="brush-diameter" width={52} value={String(editor.brushSettings.diameter)} onCommit={(raw) => { editor.brushSettings.diameter = Math.max(1, Number(raw) || 1); editor.emit() }} />
-          <Field label="Angle" width={48} value={String(editor.brushSettings.angle)} onCommit={(raw) => { editor.brushSettings.angle = Number(raw) || 0; editor.emit() }} />
-          <Field label="Round %" width={56} value={String(Math.round(editor.brushSettings.roundness * 100))} onCommit={(raw) => { editor.brushSettings.roundness = Math.min(1, Math.max(0.05, (Number(raw) || 50) / 100)); editor.emit() }} />
-          <Field label="Min %" width={52} value={String(Math.round(editor.brushSettings.minWidth * 100))} onCommit={(raw) => { editor.brushSettings.minWidth = Math.min(1, Math.max(0, (Number(raw) || 0) / 100)); editor.emit() }} />
+          <Field label="Diameter" testId="brush-diameter" width={52} title="Brush diameter in points" value={String(editor.brushSettings.diameter)} validate={numberIn({ min: 1, max: 500, label: 'Diameter' })} onCommit={(raw) => { editor.brushSettings.diameter = Number(raw); editor.emit() }} />
+          <Field label="Angle" width={48} title="Nib angle in degrees" value={String(editor.brushSettings.angle)} validate={numberIn({ min: -360, max: 360, label: 'Angle' })} onCommit={(raw) => { editor.brushSettings.angle = Number(raw.replace(/°$/, '')); editor.emit() }} />
+          <Field label="Round %" width={56} title="Nib roundness, 5 to 100" value={String(Math.round(editor.brushSettings.roundness * 100))} validate={numberIn({ min: 5, max: 100, label: 'Roundness' })} onCommit={(raw) => { editor.brushSettings.roundness = Number(raw.replace(/%$/, '')) / 100; editor.emit() }} />
+          <Field label="Min %" width={52} title="Thinnest stroke under light pressure, as a percentage of the diameter" value={String(Math.round(editor.brushSettings.minWidth * 100))} validate={numberIn({ min: 0, max: 100, label: 'Minimum width' })} onCommit={(raw) => { editor.brushSettings.minWidth = Number(raw.replace(/%$/, '')) / 100; editor.emit() }} />
         </>
       )}
       {tool === 'eraser' && (
-        <Field label="Eraser" testId="eraser-width" width={48} value={String(editor.eraserWidth)} onCommit={(raw) => { editor.eraserWidth = Math.max(1, Number(raw) || 1); editor.emit() }} />
+        <Field label="Eraser" testId="eraser-width" width={48} title="Eraser width in points" value={String(editor.eraserWidth)} validate={numberIn({ min: 1, max: 500, label: 'Eraser width' })} onCommit={(raw) => { editor.eraserWidth = Number(raw); editor.emit() }} />
       )}
       {showText && (
         <>
@@ -108,8 +108,9 @@ export function OptionsBar() {
             testId="text-size"
             width={48}
             value={String(text?.fontSize ?? editor.textDefaults.fontSize)}
+            validate={numberIn({ min: 1, max: 1000, label: 'Size' })}
             onCommit={(raw) => {
-              const size = Math.max(1, Number(raw) || 12)
+              const size = Number(raw)
               editor.textDefaults.fontSize = size
               if (text) editor.setTextProp({ fontSize: size })
               else editor.emit()

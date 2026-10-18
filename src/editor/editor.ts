@@ -110,12 +110,12 @@ import {
   formatWorldLength,
   paperPointsToWorldInches,
   parseLength,
-  scaleFromStatement,
   worldInchesToPaperPoints,
 } from '../model/units'
 import { exportPdf, exportPsd, exportSvg, exportTiff, importPsd, looksLikePsd, outsideCanvas, sliceNodes, type ExportOptions } from '../model/export'
 import { TOOL_KEYS } from '../input/shortcuts'
 import { defaultLabelUnit } from '../model/factory'
+import { labelUnitForScale, ratioFromInchesPerPoint, realInchesPerPointFor, restateScale, unitSystem, type ScaleStatement } from '../model/scale'
 
 export type Tool =
   | 'select'
@@ -1574,21 +1574,52 @@ export class Editor {
   }
 
   /** A scale statement like 1/4 in = 1 ft. */
-  setScaleStatement(paperAmount: number, paperUnit: BaseUnit, realAmount: number, realUnit: LabelUnit, statement?: string): void {
+  setScaleStatement(paperAmount: number, paperUnit: BaseUnit, realAmount: number, realUnit: LabelUnit): void {
     this.guard(() => {
       this.snapshot()
-      const canvas = this.doc.canvas
-      const wasDefaultUnit = canvas.labelUnit === defaultLabelUnit(canvas.baseUnit) || (canvas.scaleStatement != null && canvas.labelUnit === canvas.scaleLabelUnit)
-      canvas.realInchesPerPoint = scaleFromStatement(paperAmount, paperUnit, realAmount, realUnit)
-      canvas.scaleStatement = statement ?? `${paperAmount} ${paperUnit} = ${realAmount} ${realUnit}`
-      // A scale stated in feet means the user thinks in feet: switch labels to feet and inches unless they chose a unit themselves.
-      const labels: LabelUnit = realUnit === 'ft' ? 'ft-in' : realUnit
-      if (wasDefaultUnit) {
-        canvas.labelUnit = labels
-        canvas.scaleLabelUnit = labels
-      }
+      const scale: ScaleStatement = { paperAmount, paperUnit, realAmount, realUnit }
+      this.doc.canvas.realInchesPerPoint = realInchesPerPointFor(scale)
+      this.doc.canvas.scale = scale
+      this.followScaleUnit(labelUnitForScale(scale))
       this.emit()
     })
+  }
+
+  /** Applies a scale statement expressed in the current page unit. */
+  applyScale(scale: ScaleStatement): void {
+    this.setScaleStatement(scale.paperAmount, scale.paperUnit, scale.realAmount, scale.realUnit)
+  }
+
+  /** The current scale as a statement in the page unit (restated when the document only stores the ratio). */
+  scaleStatement(): ScaleStatement {
+    const canvas = this.doc.canvas
+    return canvas.scale ?? restateScale(ratioFromInchesPerPoint(canvas.realInchesPerPoint), canvas.baseUnit)
+  }
+
+  /**
+   * Changes the ruler/page unit. The scale keeps its ratio but is re-expressed in the new unit
+   * (1/4 in = 1 ft becomes 1 mm = 4.8 cm), and automatic label units move to the new system.
+   */
+  setBaseUnit(unit: BaseUnit): void {
+    const canvas = this.doc.canvas
+    if (canvas.baseUnit === unit) return
+    this.snapshot()
+    const previousSystem = unitSystem(canvas.baseUnit)
+    canvas.baseUnit = unit
+    const ratio = ratioFromInchesPerPoint(canvas.realInchesPerPoint)
+    canvas.scale = restateScale(ratio, unit)
+    if (unitSystem(unit) !== previousSystem) this.followScaleUnit(Math.abs(ratio - 1) < 1e-9 ? defaultLabelUnit(unit) : labelUnitForScale(canvas.scale))
+    this.emit()
+  }
+
+  /** Moves the label unit along with an automatic choice, unless the user picked one by hand. */
+  private followScaleUnit(unit: LabelUnit): void {
+    const canvas = this.doc.canvas
+    const defaults: LabelUnit[] = ['px', 'in', 'cm', 'mm']
+    const automatic = defaults.includes(canvas.labelUnit) || canvas.labelUnit === canvas.scaleLabelUnit
+    if (!automatic) return
+    canvas.labelUnit = unit
+    canvas.scaleLabelUnit = unit
   }
 
   setLabelUnit(unit: Doc['canvas']['labelUnit']): void {
@@ -1598,8 +1629,11 @@ export class Editor {
   }
 
   setCanvas(patch: Partial<CanvasSettings>): void {
+    const { baseUnit, ...rest } = patch
+    if (baseUnit && baseUnit !== this.doc.canvas.baseUnit) this.setBaseUnit(baseUnit)
+    if (Object.keys(rest).length === 0) return
     this.snapshot()
-    Object.assign(this.doc.canvas, patch)
+    Object.assign(this.doc.canvas, rest)
     this.emit()
   }
 

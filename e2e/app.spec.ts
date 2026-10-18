@@ -494,3 +494,50 @@ test('library search explains an empty result and places symbols in view (librar
   expect(placed.second.x).toBeCloseTo(placed.center.x + step, 1)
   expect(placed.second.y).toBeCloseTo(placed.center.y + step, 1)
 })
+
+test('page unit and scale use unit menus, and changing the unit restates the scale (unit-menus, scale-presets)', async ({ page }) => {
+  await page.goto('./')
+  // Width and height are bare numbers; the unit sits in its own menu.
+  await expect(page.getByTestId('canvas-width')).toHaveValue('11')
+  await expect(page.getByTestId('base-unit')).toHaveValue('in')
+  await expect(page.getByTestId('scale-preset')).toHaveValue('r1')
+  // Typing a unit into the number box is refused with an explanation, and the box keeps the text for correction.
+  await page.getByTestId('canvas-width').fill('30 cm')
+  await page.getByTestId('canvas-width').press('Enter')
+  await expect(page.getByTestId('canvas-width')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByTestId('banner')).toContainText('unit is set by the menu')
+  await page.getByTestId('canvas-width').press('Escape')
+  await expect(page.getByTestId('canvas-width')).toHaveValue('11')
+  // A preset sets the scale; the real-world unit menu offers imperial units.
+  await page.getByTestId('scale-preset').selectOption('r48')
+  await expect(page.getByTestId('scale-paper')).toHaveValue('1/4')
+  await expect(page.getByTestId('scale-paper-unit')).toHaveValue('in')
+  await expect(page.getByTestId('scale-real')).toHaveValue('1')
+  await expect(page.getByTestId('scale-real-unit')).toHaveValue('ft')
+  await expect(page.getByTestId('scale-real-unit').locator('option')).toHaveText(['in', 'ft', 'yd', 'mi'])
+  await expect(page.getByTestId('scale-preset')).toHaveValue('r48')
+  await expect(page.getByTestId('label-unit')).toHaveValue('ft-in')
+  // Switching the page unit converts the page size and restates the scale in millimetres, keeping the ratio.
+  await page.getByTestId('base-unit').selectOption('mm')
+  await expect(page.getByTestId('canvas-width')).toHaveValue('279.4')
+  await expect(page.getByTestId('scale-paper-unit')).toHaveValue('mm')
+  await expect(page.getByTestId('scale-paper')).toHaveValue('1')
+  await expect(page.getByTestId('scale-real')).toHaveValue('4.8')
+  await expect(page.getByTestId('scale-real-unit')).toHaveValue('cm')
+  await expect(page.getByTestId('scale-preset')).toHaveValue('custom')
+  await expect(page.getByTestId('scale-readout')).toContainText('1 mm = 4.8 cm · 1:48')
+  await expect(page.getByTestId('scale-real-unit').locator('option')).toHaveText(['mm', 'cm', 'm', 'km'])
+  await expect(page.getByTestId('label-unit')).toHaveValue('cm')
+  // Adjusting the number next to a unit menu keeps that unit.
+  await page.getByTestId('scale-real').fill('5')
+  await page.getByTestId('scale-real').press('Enter')
+  await expect(page.getByTestId('scale-preset')).toHaveValue('r50')
+  await expect(page.getByTestId('scale-preset').locator('option[value="r50"]')).toHaveText('1 mm = 5 cm  (1:50)')
+  // Picking a real-world unit from the menu changes only the unit.
+  await page.getByTestId('scale-real-unit').selectOption('m')
+  await expect(page.getByTestId('scale-readout')).toContainText('1 mm = 5 m · 1:5000')
+  // Changing the paper unit directly keeps the typed numbers.
+  await page.getByTestId('scale-paper-unit').selectOption('cm')
+  await expect(page.getByTestId('scale-preset')).toHaveValue('r500')
+  await expect(page.getByTestId('scale-preset').locator('option[value="r500"]')).toHaveText('1 cm = 5 m  (1:500)')
+})

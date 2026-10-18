@@ -1,19 +1,29 @@
 import { useState } from 'react'
 import type { BaseUnit, CanvasStyle, LabelKind, LabelLocation, LabelUnit, ObjectLabel, TransformOrigin, TransformStep } from '../../model/types'
 import { applyCanvasStyle } from '../../model/factory'
-import { inchesPerBaseUnit, parseLength } from '../../model/units'
+import { inchesPerBaseUnit } from '../../model/units'
+import { formatRatio, formatScale, formatScaleAmount, matchingPreset, parseScaleAmount, ratioFromInchesPerPoint, realUnitsFor, scalePresets, unitSystem } from '../../model/scale'
 import { IDENTITY_STEP } from '../../model/transform'
 import { editor } from '../instance'
 import { OrgIcon } from '../icons'
-import { ColorWell, Field, guarded, Row, Section } from '../ui'
+import { ColorWell, Field, guarded, numberIn, parseFraction, plainNumber, Row, Section } from '../ui'
 
 const LABEL_UNITS: LabelUnit[] = ['px', 'in', 'ft', 'ft-in', 'yd', 'mi', 'mm', 'cm', 'm', 'km']
 const BASE_UNITS: BaseUnit[] = ['px', 'in', 'cm', 'mm']
+const UNIT_NAMES: Record<BaseUnit, string> = { px: 'px (pixels)', in: 'in (inches)', cm: 'cm', mm: 'mm' }
 const ORIGINS: TransformOrigin[] = ['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se']
 
-function baseLength(points: number, unit: BaseUnit): string {
+/** A length in points shown as a bare number in the page unit; the unit itself is shown beside the box. */
+function baseNumber(points: number, unit: BaseUnit): string {
   const value = points / (72 * inchesPerBaseUnit(unit))
-  return `${Number(value.toFixed(unit === 'px' ? 0 : 3))} ${unit}`
+  return String(Number(value.toFixed(unit === 'px' ? 0 : 3)))
+}
+
+/** Points for a bare number (or fraction) typed in the page unit. */
+function basePoints(raw: string, unit: BaseUnit): number {
+  const value = parseFraction(raw)
+  if (value == null) throw new Error('Enter a number')
+  return value * 72 * inchesPerBaseUnit(unit)
 }
 
 function safe(fn: () => void): void {
@@ -23,11 +33,6 @@ function safe(fn: () => void): void {
   })
 }
 
-/** Paper points for a typed canvas size; bare numbers are in the base unit. */
-function paperPoints(raw: string, unit: BaseUnit): number {
-  const text = /[a-z]/i.test(raw) ? raw : `${raw} ${unit}`
-  return parseLength(text, 1 / 72) * 72
-}
 
 export function PropertiesPanel() {
   const canvas = editor.doc.canvas
@@ -37,17 +42,17 @@ export function PropertiesPanel() {
     <>
       <Section title="Canvas" testId="section-canvas">
         <Row>
-          <Field label="Width" testId="canvas-width" value={baseLength(canvas.width, canvas.baseUnit)} onCommit={(raw) => safe(() => editor.setCanvasSize(paperPoints(raw, canvas.baseUnit), canvas.height))} />
-          <Field label="Height" testId="canvas-height" value={baseLength(canvas.height, canvas.baseUnit)} onCommit={(raw) => safe(() => editor.setCanvasSize(canvas.width, paperPoints(raw, canvas.baseUnit)))} />
-          <button className="icon-button" title="Swap orientation" data-testid="orientation" onClick={() => editor.setCanvasSize(canvas.height, canvas.width)}>⟲</button>
-        </Row>
-        <Row>
-          <label className="field">
-            <span>Units</span>
-            <select data-testid="base-unit" value={canvas.baseUnit} onChange={(event) => editor.setCanvas({ baseUnit: event.target.value as BaseUnit })}>
-              {BASE_UNITS.map((unit) => <option key={unit}>{unit}</option>)}
+          <Field label="Width" testId="canvas-width" width={78} suffix={canvas.baseUnit} title="Page width, in the unit chosen beside it" value={baseNumber(canvas.width, canvas.baseUnit)} validate={plainNumber('Width', { min: 0.001 })} onCommit={(raw) => editor.setCanvasSize(basePoints(raw, canvas.baseUnit), canvas.height)} />
+          <Field label="Height" testId="canvas-height" width={78} suffix={canvas.baseUnit} title="Page height, in the unit chosen beside it" value={baseNumber(canvas.height, canvas.baseUnit)} validate={plainNumber('Height', { min: 0.001 })} onCommit={(raw) => editor.setCanvasSize(canvas.width, basePoints(raw, canvas.baseUnit))} />
+          <label className="field" title="Unit for the page size, rulers, grid, and the paper side of the scale. Changing it converts the numbers; nothing moves.">
+            <span>Unit</span>
+            <select data-testid="base-unit" value={canvas.baseUnit} onChange={(event) => editor.setBaseUnit(event.target.value as BaseUnit)}>
+              {BASE_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_NAMES[unit]}</option>)}
             </select>
           </label>
+          <button className="icon-button" title="Swap width and height" aria-label="Swap orientation" data-testid="orientation" onClick={() => editor.setCanvasSize(canvas.height, canvas.width)}>⟲</button>
+        </Row>
+        <Row>
           <label className="field">
             <span>Style</span>
             <select
@@ -106,13 +111,13 @@ export function PropertiesPanel() {
           <label className="check"><input type="checkbox" checked={canvas.grid.snapPoints} onChange={(event) => editor.setGrid({ snapPoints: event.target.checked })} /> Snap to points</label>
         </Row>
         <Row>
-          <Field label="Spacing X" width={56} value={String(Number(canvas.grid.spacingX.toFixed(2)))} onCommit={(raw) => editor.setGrid({ spacingX: Math.max(0, Number(raw) || 0) })} />
-          <Field label="Spacing Y" width={56} value={String(Number(canvas.grid.spacingY.toFixed(2)))} onCommit={(raw) => editor.setGrid({ spacingY: Math.max(0, Number(raw) || 0) })} />
-          <Field label="Subdivisions" width={48} value={String(canvas.grid.subdivisions)} onCommit={(raw) => editor.setGrid({ subdivisions: Math.max(1, Math.round(Number(raw) || 1)) })} />
+          <Field label="Spacing X" width={64} suffix={canvas.baseUnit} title="Distance between major grid lines on the page" value={baseNumber(canvas.grid.spacingX, canvas.baseUnit)} validate={plainNumber('Spacing', { min: 0.001 })} onCommit={(raw) => editor.setGrid({ spacingX: basePoints(raw, canvas.baseUnit) })} />
+          <Field label="Spacing Y" width={64} suffix={canvas.baseUnit} title="Distance between major grid lines on the page" value={baseNumber(canvas.grid.spacingY, canvas.baseUnit)} validate={plainNumber('Spacing', { min: 0.001 })} onCommit={(raw) => editor.setGrid({ spacingY: basePoints(raw, canvas.baseUnit) })} />
+          <Field label="Subdivisions" width={48} title="Lines between major grid lines" value={String(canvas.grid.subdivisions)} validate={numberIn({ min: 1, max: 100, integer: true, label: 'Subdivisions' })} onCommit={(raw) => editor.setGrid({ subdivisions: Number(raw) })} />
         </Row>
         <Row>
           {(['top', 'right', 'bottom', 'left'] as const).map((side) => (
-            <Field key={side} label={`Margin ${side}`} width={48} value={String(canvas.grid.margins[side])} onCommit={(raw) => editor.setGrid({ margins: { ...canvas.grid.margins, [side]: Math.max(0, Number(raw) || 0) } })} />
+            <Field key={side} label={`Margin ${side}`} width={60} suffix={canvas.baseUnit} title="Grid margin from the page edge" value={baseNumber(canvas.grid.margins[side], canvas.baseUnit)} validate={plainNumber('Margin', { min: 0 })} onCommit={(raw) => editor.setGrid({ margins: { ...canvas.grid.margins, [side]: basePoints(raw, canvas.baseUnit) } })} />
           ))}
         </Row>
         <Row wrap>
@@ -212,42 +217,69 @@ export function PropertiesPanel() {
 
 function ScaleRow() {
   const canvas = editor.doc.canvas
-  const [paper, setPaper] = useState('1 in')
-  const [real, setReal] = useState('1 ft')
-  const apply = (p: string, r: string) => {
-    const paperMatch = p.trim().match(/^([\d./]+)\s*(px|in|cm|mm)$/i)
-    const realMatch = r.trim().match(/^([\d./]+)\s*([a-z-]+)$/i)
-    if (!paperMatch || !realMatch) {
-      editor.banner = 'Enter a scale like "1/4 in = 1 ft"'
-      editor.emit()
-      return
-    }
-    const num = (text: string) => (text.includes('/') ? Number(text.split('/')[0]) / Number(text.split('/')[1]) : Number(text))
-    editor.setScaleStatement(num(paperMatch[1]), paperMatch[2].toLowerCase() as BaseUnit, num(realMatch[1]), realMatch[2].toLowerCase() as LabelUnit, `${p.trim()} = ${r.trim()}`)
+  const scale = editor.scaleStatement()
+  const ratio = ratioFromInchesPerPoint(canvas.realInchesPerPoint)
+  const presets = scalePresets(scale.paperUnit)
+  const match = matchingPreset(scale.paperUnit, canvas.realInchesPerPoint)
+  const realUnits = realUnitsFor(scale.paperUnit)
+  if (!realUnits.includes(scale.realUnit)) realUnits.push(scale.realUnit)
+  const changePaperUnit = (unit: BaseUnit) => {
+    // Keep the numbers the user typed; only swap the real-world unit when it no longer fits the new system.
+    const allowed = realUnitsFor(unit)
+    const realUnit: LabelUnit = allowed.includes(scale.realUnit) ? scale.realUnit : unit === 'px' ? 'px' : unitSystem(unit) === 'metric' ? 'm' : 'ft'
+    editor.applyScale({ ...scale, paperUnit: unit, realUnit })
   }
-  const ratio = canvas.realInchesPerPoint * 72
-  const readout = canvas.realInchesPerPoint === 1 / 72 ? 'Actual size (1:1)' : canvas.scaleStatement ? `${canvas.scaleStatement} (1:${Number(ratio.toFixed(ratio >= 10 ? 0 : 2))})` : `1:${Number(ratio.toFixed(2))}`
   return (
-    <Row>
-      <Field label="Paper" testId="scale-paper" width={56} value={paper} onCommit={(raw) => { setPaper(raw); apply(raw, real) }} />
-      <span className="eq">=</span>
-      <Field label="Real" testId="scale-real" width={56} value={real} onCommit={(raw) => { setReal(raw); apply(paper, raw) }} />
-      <span className="hint" data-testid="scale-readout" title="Paper length = real-world length. Everything you draw is measured at this scale.">{readout}</span>
-    </Row>
+    <div className="stack" data-testid="scale-row">
+      <Row>
+        <label className="field" title="Pick a common drawing scale, or set your own below">
+          <span>Scale</span>
+          <select data-testid="scale-preset" value={match ?? 'custom'} onChange={(event) => { const preset = presets.find((item) => item.id === event.target.value); if (preset) editor.applyScale(preset.scale) }}>
+            {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            {!match && <option value="custom">Custom</option>}
+          </select>
+        </label>
+        <span className="hint" data-testid="scale-readout" title="Paper length = real-world length. Everything you draw is measured at this scale.">{match ? '' : `${formatScale(scale)} · ${formatRatio(ratio)}`}</span>
+      </Row>
+      <Row>
+        <Field label="Paper" testId="scale-paper" width={48} title="Length on the page, as a number or fraction (1/4)" value={formatScaleAmount(scale.paperAmount, scale.paperUnit)} validate={plainNumber('Paper', { min: 0.0001 })} onCommit={(raw) => editor.applyScale({ ...scale, paperAmount: parseScaleAmount(raw) })} />
+        <label className="field" title="Page unit for the paper side; follows the Unit menu above">
+          <span>&nbsp;</span>
+          <select data-testid="scale-paper-unit" aria-label="Paper unit" value={scale.paperUnit} onChange={(event) => changePaperUnit(event.target.value as BaseUnit)}>
+            {BASE_UNITS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+          </select>
+        </label>
+        <span className="eq">=</span>
+        <Field label="Real" testId="scale-real" width={48} title="What that length stands for in the real world" value={formatScaleAmount(scale.realAmount, scale.realUnit)} validate={plainNumber('Real', { min: 0.0001 })} onCommit={(raw) => editor.applyScale({ ...scale, realAmount: parseScaleAmount(raw) })} />
+        <label className="field" title="Real-world unit; the choices match the paper unit's system">
+          <span>&nbsp;</span>
+          <select data-testid="scale-real-unit" aria-label="Real-world unit" value={scale.realUnit} onChange={(event) => editor.applyScale({ ...scale, realUnit: event.target.value as LabelUnit })}>
+            {realUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+          </select>
+        </label>
+      </Row>
+    </div>
   )
 }
 
 function ResizeRow() {
-  const [amount, setAmount] = useState('1 in')
+  const unit = editor.doc.canvas.baseUnit
+  const [amount, setAmount] = useState('1')
+  const add = (side: 'left' | 'right' | 'top' | 'bottom') => safe(() => editor.resizeCanvas(side, basePoints(amount, unit)))
   return (
-    <Row wrap>
-      <Field label="Add" width={52} value={amount} onCommit={setAmount} />
-      {(['left', 'right', 'top', 'bottom'] as const).map((side) => (
-        <button key={side} data-testid={`resize-${side}`} onClick={() => safe(() => editor.resizeCanvas(side, editor.pointsFor(amount)))}>{side}</button>
-      ))}
-      <button data-testid="resize-artwork" onClick={() => editor.resizeArtwork(2, true)}>Artwork ×2</button>
-      <button onClick={() => editor.resizeArtwork(0.5, true)}>Artwork ×½</button>
-    </Row>
+    <div className="stack">
+      <Row wrap>
+        <Field label="Grow page by" width={60} suffix={unit} title="How much to add to the page on the side you click" value={amount} validate={plainNumber('Amount', { min: 0.001 })} onCommit={setAmount} />
+        {(['left', 'right', 'top', 'bottom'] as const).map((side) => (
+          <button key={side} data-testid={`resize-${side}`} title={`Add ${amount} ${unit} to the ${side} edge`} onClick={() => add(side)}>{side[0].toUpperCase() + side.slice(1)}</button>
+        ))}
+      </Row>
+      <Row wrap>
+        <span className="hint">Fit the page to the drawing:</span>
+        <button data-testid="resize-artwork" title="Make the page twice the size of the drawing, centred on it" onClick={() => editor.resizeArtwork(2, true)}>Artwork ×2</button>
+        <button title="Make the page half the size of the drawing, centred on it" onClick={() => editor.resizeArtwork(0.5, true)}>Artwork ×½</button>
+      </Row>
+    </div>
   )
 }
 
@@ -266,7 +298,7 @@ function LabelRow({ index, label, text }: { index: number; label: ObjectLabel; t
             {(['top', 'bottom', 'left', 'right', 'center'] as const).map((location) => <option key={location}>{location}</option>)}
           </select>
         </label>
-        <Field label="Offset" testId="label-offset" width={44} value={String(label.offset)} onCommit={(raw) => editor.updateLabel(index, { offset: Number(raw) || 0 })} />
+        <Field label="Offset" testId="label-offset" width={44} title="Distance from the object in points" value={String(label.offset)} validate={numberIn({ min: -500, max: 500, label: 'Offset' })} onCommit={(raw) => editor.updateLabel(index, { offset: Number(raw) })} />
         <label className="field">
           <span>Align</span>
           <select value={label.align} onChange={(event) => editor.updateLabel(index, { align: event.target.value as ObjectLabel['align'] })}>
@@ -301,29 +333,23 @@ function TransformPanel() {
   const [copy, setCopy] = useState(false)
   const [scaleStyles, setScaleStyles] = useState(false)
   const patch = (next: Partial<TransformStep>) => setStep((current) => ({ ...current, ...next }))
-  const num = (raw: string, fallback: number) => (Number.isFinite(Number(raw)) && raw.trim() !== '' ? Number(raw) : fallback)
-  const pts = (raw: string) => {
-    if (!raw.trim()) return 0
-    try {
-      return editor.pointsFor(raw)
-    } catch (error) {
-      editor.banner = error instanceof Error ? error.message : 'Enter a length'
-      editor.emit()
-      return 0
-    }
-  }
+  const num = (raw: string) => Number(raw.trim().replace(/[°%]$/, ''))
+  const unit = editor.doc.canvas.baseUnit
+  const pts = (raw: string) => (raw.trim() ? basePoints(raw, unit) : 0)
+  const degrees = numberIn({ min: -3600, max: 3600, label: 'Angle' })
+  const percent = numberIn({ min: -10000, max: 10000, label: 'Scale' })
   return (
     <div className="stack" data-testid="transform-panel">
       <Row>
-        <Field label="Move X" testId="tf-dx" width={56} value={String(step.dx)} onCommit={(raw) => patch({ dx: pts(raw) })} />
-        <Field label="Move Y" testId="tf-dy" width={56} value={String(step.dy)} onCommit={(raw) => patch({ dy: pts(raw) })} />
-        <Field label="Rotate °" testId="tf-rotate" width={52} value={String(Number(((step.rotate * 180) / Math.PI).toFixed(2)))} onCommit={(raw) => patch({ rotate: (num(raw, 0) * Math.PI) / 180 })} />
+        <Field label="Move X" testId="tf-dx" width={64} suffix={unit} title="Distance to move right, on the page" value={baseNumber(step.dx, unit)} validate={plainNumber('Move X')} onCommit={(raw) => patch({ dx: pts(raw) })} />
+        <Field label="Move Y" testId="tf-dy" width={64} suffix={unit} title="Distance to move down, on the page" value={baseNumber(step.dy, unit)} validate={plainNumber('Move Y')} onCommit={(raw) => patch({ dy: pts(raw) })} />
+        <Field label="Rotate °" testId="tf-rotate" width={52} value={String(Number(((step.rotate * 180) / Math.PI).toFixed(2)))} validate={degrees} onCommit={(raw) => patch({ rotate: (num(raw) * Math.PI) / 180 })} />
       </Row>
       <Row>
-        <Field label="Scale X %" testId="tf-scale-x" width={52} value={String(Math.round(step.scaleX * 100))} onCommit={(raw) => patch({ scaleX: num(raw, 100) / 100 })} />
-        <Field label="Scale Y %" testId="tf-scale-y" width={52} value={String(Math.round(step.scaleY * 100))} onCommit={(raw) => patch({ scaleY: num(raw, 100) / 100 })} />
-        <Field label="Shear X °" testId="tf-shear-x" width={52} value={String(Number(((step.shearX * 180) / Math.PI).toFixed(2)))} onCommit={(raw) => patch({ shearX: (num(raw, 0) * Math.PI) / 180 })} />
-        <Field label="Shear Y °" width={52} value={String(Number(((step.shearY * 180) / Math.PI).toFixed(2)))} onCommit={(raw) => patch({ shearY: (num(raw, 0) * Math.PI) / 180 })} />
+        <Field label="Scale X %" testId="tf-scale-x" width={52} value={String(Math.round(step.scaleX * 100))} validate={percent} onCommit={(raw) => patch({ scaleX: num(raw) / 100 })} />
+        <Field label="Scale Y %" testId="tf-scale-y" width={52} value={String(Math.round(step.scaleY * 100))} validate={percent} onCommit={(raw) => patch({ scaleY: num(raw) / 100 })} />
+        <Field label="Shear X °" testId="tf-shear-x" width={52} value={String(Number(((step.shearX * 180) / Math.PI).toFixed(2)))} validate={degrees} onCommit={(raw) => patch({ shearX: (num(raw) * Math.PI) / 180 })} />
+        <Field label="Shear Y °" width={52} value={String(Number(((step.shearY * 180) / Math.PI).toFixed(2)))} validate={degrees} onCommit={(raw) => patch({ shearY: (num(raw) * Math.PI) / 180 })} />
       </Row>
       <Row>
         <div className="origin-grid" role="group" aria-label="Origin">

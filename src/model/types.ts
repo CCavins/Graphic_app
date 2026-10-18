@@ -263,9 +263,9 @@ export interface CanvasSettings {
   baseUnit: BaseUnit
   /** World inches represented by one paper point. */
   realInchesPerPoint: number
-  /** The statement the user typed for the scale, e.g. "1/4 in = 1 ft", echoed back in the Properties pane. */
-  scaleStatement?: string
-  /** Label unit that the last scale statement chose, so a later statement may change it again while a manual choice is kept. */
+  /** The scale as the user stated it ("1/4 in = 1 ft"), kept so the Properties pane shows the same words back. */
+  scale?: { paperAmount: number; paperUnit: BaseUnit; realAmount: number; realUnit: LabelUnit }
+  /** Label unit that the last scale or unit change chose, so automatic choices may change again while a manual choice is kept. */
   scaleLabelUnit?: LabelUnit
   labelUnit: LabelUnit
   precision: Precision

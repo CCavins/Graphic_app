@@ -20,7 +20,10 @@ import { fromHex, hsbToRgb, rgb, rgbToCmyk, rgbToHsb, toHex } from './model/colo
 import { PRESETS } from './model/factory'
 import { SHORTCUTS, TOOL_KEYS } from './input/shortcuts'
 import { TOOL_INFO, TOOL_NAMES, TOOLS } from './app/toolInfo'
+import { numberIn, parseFraction, plainNumber } from './app/ui'
 import { bodyHtml, renderDocsPage } from './help/docs'
+import { formatScale, formatScaleAmount, matchingPreset, parseScaleAmount, realUnitsFor, restateScale, scalePresets, scaleRatio } from './model/scale'
+import { scaleFromStatement } from './model/units'
 import { findTopic, MANUAL, searchManual } from './help/manual'
 
 const pointer = (cx: number, cy: number, extra: Record<string, unknown> = {}) => ({
@@ -1839,8 +1842,10 @@ Object.assign(cases, {
   'scale-statement-echo'() {
     const app = editor()
     expect(app.doc.canvas.labelUnit).toBe('in')
-    app.setScaleStatement(0.25, 'in', 1, 'ft', '1/4 in = 1 ft')
-    expect(app.doc.canvas.scaleStatement).toBe('1/4 in = 1 ft')
+    expect(formatScale(app.scaleStatement())).toBe('1 in = 1 in')
+    app.setScaleStatement(0.25, 'in', 1, 'ft')
+    expect(app.doc.canvas.scale).toEqual({ paperAmount: 0.25, paperUnit: 'in', realAmount: 1, realUnit: 'ft' })
+    expect(formatScale(app.scaleStatement())).toBe('1/4 in = 1 ft')
     expect(app.doc.canvas.realInchesPerPoint).toBeCloseTo(quarterInchFootScale())
     // A scale in feet moves the default label unit to feet-and-inches so a 40 ft wall does not read "480 in".
     expect(app.doc.canvas.labelUnit).toBe('ft-in')
@@ -1848,13 +1853,102 @@ Object.assign(cases, {
     app.setLabelUnit('m')
     app.setScaleStatement(1, 'cm', 1, 'm')
     expect(app.doc.canvas.labelUnit).toBe('m')
-    expect(app.doc.canvas.scaleStatement).toBe('1 cm = 1 m')
+    expect(formatScale(app.scaleStatement())).toBe('1 cm = 1 m')
     // But a unit a previous statement chose follows the next statement.
     const other = editor()
     other.setScaleStatement(1, 'in', 1, 'ft')
     expect(other.doc.canvas.labelUnit).toBe('ft-in')
     other.setScaleStatement(1, 'cm', 1, 'm')
     expect(other.doc.canvas.labelUnit).toBe('m')
+  },
+  'scale-restate'() {
+    // The same ratio reads naturally in each unit system.
+    expect(formatScale(restateScale(48, 'in'))).toBe('1/4 in = 1 ft')
+    expect(formatScale(restateScale(96, 'in'))).toBe('1/8 in = 1 ft')
+    expect(formatScale(restateScale(12, 'in'))).toBe('1 in = 1 ft')
+    expect(formatScale(restateScale(120, 'in'))).toBe('1 in = 10 ft')
+    expect(formatScale(restateScale(2, 'in'))).toBe('1 in = 2 in')
+    expect(formatScale(restateScale(48, 'mm'))).toBe('1 mm = 4.8 cm')
+    expect(formatScale(restateScale(50, 'cm'))).toBe('1 cm = 50 cm')
+    expect(formatScale(restateScale(100, 'cm'))).toBe('1 cm = 1 m')
+    expect(formatScale(restateScale(1000, 'mm'))).toBe('1 mm = 1 m')
+    expect(formatScale(restateScale(1, 'mm'))).toBe('1 mm = 1 mm')
+    expect(formatScale(restateScale(72 * 12, 'px'))).toBe('1 px = 1 ft')
+    expect(formatScale(restateScale(72, 'px'))).toBe('1 px = 1 in')
+    // Restating never changes the ratio.
+    for (const ratio of [1, 2, 12, 48, 96, 50, 100, 250, 72 * 12]) for (const unit of ['in', 'cm', 'mm', 'px'] as const) expect(scaleRatio(restateScale(ratio, unit))).toBeCloseTo(ratio, 6)
+    // Real-world unit menus match the paper unit's system.
+    expect(realUnitsFor('in')).toEqual(['in', 'ft', 'yd', 'mi'])
+    expect(realUnitsFor('mm')).toEqual(['mm', 'cm', 'm', 'km'])
+    expect(realUnitsFor('px')).toContain('m')
+    // Presets exist for every system and name their ratio.
+    expect(scalePresets('in').map((p) => p.label)).toContain('1/4 in = 1 ft  (1:48)')
+    expect(scalePresets('cm').map((p) => p.label)).toContain('1 cm = 1 m  (1:100)')
+    expect(scalePresets('mm').map((p) => p.label)).toContain('1 mm = 5 cm  (1:50)')
+    expect(scalePresets('px').map((p) => p.label)).toContain('1 px = 1 ft')
+    expect(matchingPreset('in', quarterInchFootScale())).toBe('r48')
+    expect(matchingPreset('in', scaleFromStatement(1, 'in', 7, 'ft'))).toBeNull()
+    // Amounts are numbers or fractions; units belong to the menu.
+    expect(parseScaleAmount('1/4')).toBe(0.25)
+    expect(parseScaleAmount('1 1/2')).toBe(1.5)
+    expect(parseScaleAmount(' 2.5 ')).toBe(2.5)
+    expect(() => parseScaleAmount('1 in')).toThrow(/menu/)
+    expect(() => parseScaleAmount('0')).toThrow(/more than zero/)
+    expect(() => parseScaleAmount('..')).toThrow(/amount/)
+    expect(formatScaleAmount(0.375, 'in')).toBe('3/8')
+    expect(formatScaleAmount(0.375, 'cm')).toBe('0.375')
+    expect(formatScaleAmount(2, 'in')).toBe('2')
+  },
+  'base-unit-rescale'() {
+    // Changing the page unit converts the scale statement and label unit to that system, keeping the ratio.
+    const app = editor()
+    app.setScaleStatement(0.25, 'in', 1, 'ft')
+    const before = app.doc.canvas.realInchesPerPoint
+    app.setBaseUnit('mm')
+    expect(app.doc.canvas.baseUnit).toBe('mm')
+    expect(app.doc.canvas.realInchesPerPoint).toBeCloseTo(before)
+    expect(formatScale(app.scaleStatement())).toBe('1 mm = 4.8 cm')
+    expect(app.doc.canvas.labelUnit).toBe('cm')
+    app.setBaseUnit('in')
+    expect(formatScale(app.scaleStatement())).toBe('1/4 in = 1 ft')
+    expect(app.doc.canvas.labelUnit).toBe('ft-in')
+    // Actual size stays actual size and labels go to the plain unit.
+    const plain = editor()
+    plain.setBaseUnit('cm')
+    expect(formatScale(plain.scaleStatement())).toBe('1 cm = 1 cm')
+    expect(plain.doc.canvas.labelUnit).toBe('cm')
+    // The legacy setCanvas path still works and the same unit is a no-op.
+    plain.setCanvas({ baseUnit: 'mm' })
+    expect(plain.doc.canvas.baseUnit).toBe('mm')
+    const history = plain.historySize()
+    plain.setBaseUnit('mm')
+    expect(plain.historySize()).toBe(history)
+    // A hand-picked label unit survives a unit change.
+    const manual = editor()
+    manual.setLabelUnit('yd')
+    manual.setBaseUnit('cm')
+    expect(manual.doc.canvas.labelUnit).toBe('yd')
+  },
+  'field-validation'() {
+    // Validators explain refusals in plain words instead of silently clamping.
+    const sides = numberIn({ min: 3, max: 100, integer: true, label: 'Sides' })
+    expect(sides('6')).toBeNull()
+    expect(sides('2')).toMatch(/at least 3/)
+    expect(sides('2.5')).toMatch(/whole number/)
+    expect(sides('abc')).toMatch(/must be a number/)
+    expect(sides('')).toMatch(/Enter Sides/)
+    expect(numberIn({ min: 5, max: 95, label: 'Inner %' })('40%')).toBeNull()
+    const width = plainNumber('Width', { min: 0.001 })
+    expect(width('8.5')).toBeNull()
+    expect(width('1/4')).toBeNull()
+    expect(width('30 cm')).toMatch(/unit is set by the menu/)
+    expect(width('0')).toMatch(/at least/)
+    expect(width('x')).toMatch(/number like/)
+    expect(parseFraction('1/4')).toBe(0.25)
+    expect(parseFraction('1 1/2')).toBe(1.5)
+    expect(parseFraction('-2.5')).toBe(-2.5)
+    expect(parseFraction('1/0')).toBeNull()
+    expect(parseFraction('')).toBeNull()
   },
   'help-manual-complete'() {
     // Every tool and every pane has a topic; ids are unique; search finds things by plain words.

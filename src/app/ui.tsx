@@ -12,6 +12,8 @@ export function Field({
   width = 72,
   disabled,
   title,
+  validate,
+  suffix,
 }: {
   value: string
   onCommit: (raw: string) => void
@@ -20,45 +22,134 @@ export function Field({
   width?: number
   disabled?: boolean
   title?: string
+  /** Returns a message when the typed text is not acceptable; the field then stays open with the text so it can be corrected. */
+  validate?: (raw: string) => string | null
+  /** A unit shown after the box, so the box itself holds only the number. */
+  suffix?: string
 }) {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // Enter and Escape blur the box themselves; that blur must not commit (or re-commit) the draft.
+  const skipBlur = useRef(false)
   useEffect(() => {
     if (!editing) setDraft(value)
   }, [value, editing])
+  /** Validates, commits, and reports; returns false when the value was refused. */
+  const commit = (raw: string): boolean => {
+    const message = validate?.(raw) ?? null
+    if (message) {
+      setError(message)
+      reportFieldError(message)
+      return false
+    }
+    try {
+      onCommit(raw)
+      setError(null)
+      return true
+    } catch (caught) {
+      const text = caught instanceof Error ? caught.message : 'That value is not valid'
+      setError(text)
+      reportFieldError(text)
+      return false
+    }
+  }
   return (
-    <label className="field" title={title}>
+    <label className="field" title={error ?? title} data-suffix={suffix ? true : undefined}>
       {label && <span>{label}</span>}
       <input
         data-testid={testId}
         value={editing ? draft : value}
         disabled={disabled}
         style={{ width }}
+        aria-invalid={error ? true : undefined}
+        aria-label={label ? undefined : title}
         onFocus={() => {
           setDraft(value)
           setEditing(true)
         }}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => {
+          setDraft(event.target.value)
+          if (error) setError(null)
+        }}
         onBlur={() => {
+          if (skipBlur.current) {
+            skipBlur.current = false
+            return
+          }
+          if (draft !== value && !commit(draft)) {
+            // Keep the draft visible with the red outline so the user sees what was refused.
+            setEditing(true)
+            return
+          }
           setEditing(false)
-          if (draft !== value) onCommit(draft)
         }}
         onKeyDown={(event) => {
           event.stopPropagation()
           if (event.key === 'Enter') {
-            onCommit(draft)
-            setEditing(false)
-            event.currentTarget.blur()
+            if (commit(draft)) {
+              setEditing(false)
+              skipBlur.current = true
+              event.currentTarget.blur()
+            }
           }
           if (event.key === 'Escape') {
             setDraft(value)
+            setError(null)
             setEditing(false)
+            skipBlur.current = true
             event.currentTarget.blur()
           }
         }}
       />
+      {suffix && <span className="suffix" aria-hidden="true">{suffix}</span>}
     </label>
   )
+}
+
+/** Where field errors go; the app points this at the banner. */
+export let reportFieldError: (message: string) => void = () => {}
+export function setFieldErrorReporter(reporter: (message: string) => void): void {
+  reportFieldError = reporter
+}
+
+/** Validator for a number typed without a unit, for boxes that have a unit menu or suffix beside them. */
+export function plainNumber(label: string, { min, max }: { min?: number; max?: number } = {}): (raw: string) => string | null {
+  return (raw) => {
+    const text = raw.trim()
+    if (!text) return `Enter ${label}`
+    if (/[a-z"']/i.test(text)) return `Type just the number for ${label}; the unit is set by the menu beside it`
+    const n = parseFraction(text)
+    if (n == null) return `${label} must be a number like 8.5 or 1/4`
+    if (min != null && n < min) return `${label} must be at least ${min}`
+    if (max != null && n > max) return `${label} must be at most ${max}`
+    return null
+  }
+}
+
+/** "1/4" → 0.25, "8.5" → 8.5, "1 1/2" → 1.5; null when not a number. */
+export function parseFraction(text: string): number | null {
+  const match = text.trim().match(/^(-?\d+(?:\.\d+)?)?(?:\s+)?(?:(\d+)\s*\/\s*(\d+))?$/)
+  if (!match || (!match[1] && !match[2])) return null
+  const whole = match[1] ? Number(match[1]) : 0
+  const frac = match[2] ? Number(match[2]) / Number(match[3]) : 0
+  if (match[2] && Number(match[3]) === 0) return null
+  const sign = whole < 0 || match[1]?.startsWith('-') ? -1 : 1
+  return whole + sign * frac
+}
+
+/** Validator for a plain number with optional bounds; a unit suffix is allowed when `units` is set. */
+export function numberIn({ min, max, integer, label, allowEmpty }: { min?: number; max?: number; integer?: boolean; label: string; allowEmpty?: boolean }): (raw: string) => string | null {
+  return (raw) => {
+    const text = raw.trim()
+    if (!text) return allowEmpty ? null : `Enter ${label}`
+    const n = Number(text.replace(/[°%]$/, ''))
+    if (!Number.isFinite(n)) return `${label} must be a number`
+    if (integer && !Number.isInteger(n)) return `${label} must be a whole number`
+    if (min != null && n < min) return `${label} must be at least ${min}`
+    if (max != null && n > max) return `${label} must be at most ${max}`
+    return null
+  }
 }
 
 /**

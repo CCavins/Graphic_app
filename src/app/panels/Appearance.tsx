@@ -4,7 +4,7 @@ import { dashPresetOf } from '../../editor/editor'
 import { rgb } from '../../model/color'
 import { APPROXIMATE_BLEND, BLEND_MODES, type BlendMode, type EffectKind, type Gradient, type StrokeAttr, type TextData } from '../../model/types'
 import { editor } from '../instance'
-import { ColorWell, Field, Row, Section, Slider } from '../ui'
+import { ColorWell, Field, Row, Section, Slider, numberIn } from '../ui'
 
 const EFFECTS: { kind: EffectKind; name: string }[] = [
   { kind: 'dropShadow', name: 'Drop shadow' },
@@ -97,7 +97,7 @@ export function AppearancePanel({ onRecolor, onSelectSimilar }: { onRecolor: () 
           </label>
           <ColorWell testId="stroke-color" label="Stroke color" color={strokeColor} cmyk={cmyk} onChange={(color) => editor.setStroke({ color, enabled: true })} />
           <Field label="Hex" testId="stroke-hex" width={76} value={editor.hexOf(strokeColor)} onCommit={(raw) => editor.setStrokeHex(raw)} />
-          <Field label="Width" testId="stroke-width" width={52} value={String(stroke?.width ?? editor.paint.strokeWidth)} onCommit={(raw) => editor.setStroke({ width: Number(raw), enabled: true })} />
+          <Field label="Width" testId="stroke-width" width={52} title="Stroke width in points" value={String(stroke?.width ?? editor.paint.strokeWidth)} validate={numberIn({ min: 0, max: 1000, label: 'Stroke width' })} onCommit={(raw) => editor.setStroke({ width: Number(raw), enabled: true })} />
         </Row>
         <Row>
           <label className="field">
@@ -112,10 +112,16 @@ export function AppearancePanel({ onRecolor, onSelectSimilar }: { onRecolor: () 
             label="Custom"
             testId="stroke-custom-dash"
             width={72}
+            title="Dash and gap lengths in points, e.g. 6 3 or 8 2 2 2. Empty means solid."
             value={customDash || (stroke?.dash.join(' ') ?? '')}
+            validate={(raw) => {
+              const tokens = raw.trim().split(/[\s,]+/).filter(Boolean)
+              const bad = tokens.find((token) => !Number.isFinite(Number(token)) || Number(token) < 0)
+              return bad ? `"${bad}" is not a length; use numbers like 6 3` : null
+            }}
             onCommit={(raw) => {
               setCustomDash(raw)
-              const dash = raw.split(/[\s,]+/).map(Number).filter((n) => Number.isFinite(n) && n >= 0)
+              const dash = raw.trim().split(/[\s,]+/).filter(Boolean).map(Number)
               editor.setStroke({ dash, enabled: true })
             }}
           />
@@ -229,12 +235,12 @@ function TextSection({ text }: { text: TextData }) {
         <Slider label="Line" testId="line-spacing" min={0.6} max={3} step={0.05} value={text.lineSpacing} onChange={(lineSpacing) => editor.setTextProp({ lineSpacing })} />
         <Slider label="Char" testId="char-spacing" min={-5} max={30} step={0.5} value={text.charSpacing} onChange={(charSpacing) => editor.setTextProp({ charSpacing })} />
       </Row>
-      {text.mode === 'field' && <Field label="Field width" width={64} value={String(Math.round(text.fieldWidth))} onCommit={(raw) => editor.setTextProp({ fieldWidth: Math.max(10, Number(raw) || 10) })} />}
+      {text.mode === 'field' && <Field label="Field width" width={64} title="Width of the text box in points" value={String(Math.round(text.fieldWidth))} validate={numberIn({ min: 10, max: 10000, label: 'Field width' })} onCommit={(raw) => editor.setTextProp({ fieldWidth: Number(raw) })} />}
       <Row wrap>
         {!text.onPath && <button data-testid="text-on-path" onClick={() => editor.placeTextOnPath()}>Place on path</button>}
         {text.onPath && (
           <>
-            <Field label="Path offset" testId="text-path-offset" width={56} value={String(Math.round(text.pathOffset))} onCommit={(raw) => editor.setTextPathOffset(Number(raw) || 0)} />
+            <Field label="Path offset" testId="text-path-offset" width={56} title="How far along the path the text starts, in points" value={String(Math.round(text.pathOffset))} validate={numberIn({ label: 'Path offset' })} onCommit={(raw) => editor.setTextPathOffset(Number(raw))} />
             <button data-testid="text-release" onClick={() => editor.releaseText()}>Release</button>
             <button onClick={() => editor.reverseSelected()}>Reverse</button>
           </>
