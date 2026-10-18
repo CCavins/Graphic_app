@@ -6,6 +6,15 @@ import { Field, Row, Section, ShapePreview } from '../ui'
 
 const ROW = 40
 
+/** "My shapes", then "My shapes 2", "My shapes 3", so a new library never collides with an existing name. */
+function nextLibraryName(existing: string[]): string {
+  const base = 'My shapes'
+  if (!existing.includes(base)) return base
+  let n = 2
+  while (existing.includes(`${base} ${n}`)) n++
+  return `${base} ${n}`
+}
+
 export function LibrariesPanel() {
   const [query, setQuery] = useState('')
   const [library, setLibrary] = useState('')
@@ -33,6 +42,11 @@ export function LibrariesPanel() {
         </select>
       </Row>
       <div className="library" data-testid="library-list" onScroll={(event) => setScroll(event.currentTarget.scrollTop)}>
+        {results.length === 0 && catalogLoaded() && (
+          <p className="hint library-empty" data-testid="library-empty">
+            No shapes match “{query}”{library ? ` in ${library}` : ''}. Try a shorter word, or choose All libraries.
+          </p>
+        )}
         <div style={{ height: results.length * ROW }}>
           {visible.map((item, index) => (
             <button
@@ -40,7 +54,7 @@ export function LibrariesPanel() {
               className="symbol"
               data-testid="symbol-item"
               draggable
-              title={`${item.library} › ${item.category}. Click to place, or drag onto the canvas.`}
+              title={`${item.library} › ${item.category}. Click to place it in the middle of the view, or drag it onto the canvas.`}
               style={{ top: (start + index) * ROW, height: ROW }}
               onDragStart={(event) => {
                 event.dataTransfer.setData('application/x-measured-symbol', item.id)
@@ -59,7 +73,7 @@ export function LibrariesPanel() {
       <p className="hint" data-testid="catalog-count">{total} shapes{query ? ` · ${results.length} match` : ''}{catalogLoaded() ? '' : ' · loading…'}</p>
       <Section title="My libraries" testId="section-custom" defaultOpen={false}>
         <Row wrap>
-          <button data-testid="create-library" onClick={() => editor.createLibrary(window.prompt('Library name', 'My shapes') ?? 'My shapes')}>New library</button>
+          <button data-testid="create-library" title="Create a library; rename it in the field that appears" onClick={() => editor.createLibrary(nextLibraryName(editor.customLibraries.map((custom) => custom.name)))}>New library</button>
           <button data-testid="import-library" onClick={() => importRef.current?.click()}>Import…</button>
           <input ref={importRef} hidden type="file" accept=".json,.measuredlib" onChange={(event) => {
             const file = event.target.files?.[0]
@@ -78,19 +92,11 @@ export function LibrariesPanel() {
             </Row>
             <Row>
               <Field label="Add selection as" width={90} value={shapeName} onCommit={setShapeName} />
-              <button data-testid="add-to-library" disabled={!editor.one()} onClick={() => editor.addToLibrary(custom.id, shapeName)}>+</button>
+              <button data-testid="add-to-library" disabled={!editor.one()} title={editor.one() ? 'Add the selected shape to this library' : 'Select one shape on the canvas first'} onClick={() => editor.addToLibrary(custom.id, shapeName)}>+</button>
             </Row>
           </div>
         ))}
         {!editor.customLibraries.length && <p className="hint">Create a library, then add the selected shape with +.</p>}
-      </Section>
-      <Section title="Saved styles" defaultOpen={false}>
-        {editor.doc.styles.length ? editor.doc.styles.map((style) => (
-          <Row key={style.id}>
-            <button className="grow" onClick={() => editor.applySavedStyle(style.id)}>{style.name}</button>
-            <button className="icon-button" aria-label={`Delete ${style.name}`} onClick={() => editor.deleteStyle(style.id)}>×</button>
-          </Row>
-        )) : <p className="hint">Save a style from the Appearance pane.</p>}
       </Section>
       <details className="attribution">
         <summary>Symbol sources and licenses</summary>

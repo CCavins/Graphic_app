@@ -358,10 +358,10 @@ test('closing a document with content asks first (close-confirm)', async ({ page
   await page.getByTestId('new-create').click()
   await page.getByTestId('doc-tab').first().click()
   page.once('dialog', (dialog) => void dialog.dismiss())
-  await page.locator('.doc-tab .close').click()
+  await page.locator('.doc-tab-wrap .close').click()
   await expect(page.getByTestId('doc-tab')).toHaveCount(2)
   page.once('dialog', (dialog) => void dialog.accept())
-  await page.locator('.doc-tab .close').click()
+  await page.locator('.doc-tab-wrap .close').click()
   await expect(page.getByTestId('doc-tab')).toHaveCount(1)
 })
 
@@ -436,4 +436,61 @@ test('the docs page is published beside the app (help-docs-page)', async ({ page
   await expect(page.locator('#tool-roundRect')).toBeVisible()
   await expect(page.locator('#tool-pen')).toBeHidden()
   await expect(page.getByRole('link', { name: 'Back to the app' })).toHaveAttribute('href', '../')
+})
+
+test('tabs, layers, and objects rename inline without a prompt (inline-rename)', async ({ page }) => {
+  await page.goto('./')
+  // Document tab.
+  const tab = page.getByTestId('doc-tab').first()
+  await expect(tab).toHaveAttribute('title', 'Double-click to rename')
+  await tab.dblclick()
+  const tabInput = page.getByTestId('doc-tab-input')
+  await expect(tabInput).toBeFocused()
+  await tabInput.fill('Kitchen plan')
+  await tabInput.press('Enter')
+  await expect(page.getByTestId('doc-tab').first()).toHaveText('Kitchen plan')
+  // Layer.
+  await page.getByTestId('tab-Layers').click()
+  await page.getByTestId('layer-name').first().dblclick()
+  await page.getByTestId('layer-name-input').fill('Walls')
+  await page.getByTestId('layer-name-input').press('Enter')
+  await expect(page.getByTestId('layer-name').first()).toContainText('Walls')
+  // Object: Escape cancels, blur commits.
+  await drawRect(page)
+  await page.getByTestId('object-name').first().dblclick()
+  await page.getByTestId('object-name-input').fill('Discarded')
+  await page.getByTestId('object-name-input').press('Escape')
+  await expect(page.getByTestId('object-name').first()).not.toContainText('Discarded')
+  await page.getByTestId('object-name').first().dblclick()
+  await page.getByTestId('object-name-input').fill('Island')
+  await page.getByTestId('object-name-input').press('Tab')
+  await expect(page.getByTestId('object-name').first()).toContainText('Island')
+  // Typing in the rename box does not switch tools.
+  await expect(page.getByTestId('active-tool')).toHaveText('Rectangle')
+})
+
+test('library search explains an empty result and places symbols in view (library-empty, symbol-view-center)', async ({ page }) => {
+  await page.goto('./')
+  await page.getByTestId('tab-Libraries').click()
+  await expect(page.getByTestId('catalog-count')).toContainText(/\d+ shapes/)
+  await page.getByTestId('library-search').fill('qwxzv')
+  await expect(page.getByTestId('library-empty')).toContainText('No shapes match')
+  await page.getByTestId('library-search').fill('door')
+  await expect(page.getByTestId('library-empty')).toHaveCount(0)
+  await page.getByTestId('symbol-item').first().click()
+  await page.getByTestId('symbol-item').first().click()
+  const placed = await page.evaluate(() => {
+    type Rect = { x: number; y: number; w: number; h: number }
+    const ed = (window as unknown as { __measured: { editor: { doc: { layers: { children: { x: number; y: number }[] }[] }; viewCenter(): { x: number; y: number }; viewport: { width: number } | null; selectionRect(): Rect | null; view: { zoom: number } } } }).__measured.editor
+    const nodes = ed.doc.layers[0].children
+    const rect = ed.selectionRect()!
+    return { count: nodes.length, dx: nodes[1].x - nodes[0].x, hasViewport: !!ed.viewport, center: ed.viewCenter(), second: { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 }, zoom: ed.view.zoom }
+  })
+  expect(placed.count).toBe(2)
+  expect(placed.hasViewport).toBe(true)
+  // The second copy sits one 12 px step from the first, which was centred on the view.
+  const step = 12 / placed.zoom
+  expect(placed.dx).toBeCloseTo(step, 3)
+  expect(placed.second.x).toBeCloseTo(placed.center.x + step, 1)
+  expect(placed.second.y).toBeCloseTo(placed.center.y + step, 1)
 })

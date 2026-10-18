@@ -223,14 +223,16 @@ function ScaleRow() {
       return
     }
     const num = (text: string) => (text.includes('/') ? Number(text.split('/')[0]) / Number(text.split('/')[1]) : Number(text))
-    editor.setScaleStatement(num(paperMatch[1]), paperMatch[2].toLowerCase() as BaseUnit, num(realMatch[1]), realMatch[2].toLowerCase() as LabelUnit)
+    editor.setScaleStatement(num(paperMatch[1]), paperMatch[2].toLowerCase() as BaseUnit, num(realMatch[1]), realMatch[2].toLowerCase() as LabelUnit, `${p.trim()} = ${r.trim()}`)
   }
+  const ratio = canvas.realInchesPerPoint * 72
+  const readout = canvas.realInchesPerPoint === 1 / 72 ? 'Actual size (1:1)' : canvas.scaleStatement ? `${canvas.scaleStatement} (1:${Number(ratio.toFixed(ratio >= 10 ? 0 : 2))})` : `1:${Number(ratio.toFixed(2))}`
   return (
     <Row>
       <Field label="Paper" testId="scale-paper" width={56} value={paper} onCommit={(raw) => { setPaper(raw); apply(raw, real) }} />
       <span className="eq">=</span>
       <Field label="Real" testId="scale-real" width={56} value={real} onCommit={(raw) => { setReal(raw); apply(paper, raw) }} />
-      <span className="hint" data-testid="scale-readout">{canvas.realInchesPerPoint === 1 / 72 ? '1:1' : `1 pt = ${Number(canvas.realInchesPerPoint.toFixed(4))} in`}</span>
+      <span className="hint" data-testid="scale-readout" title="Paper length = real-world length. Everything you draw is measured at this scale.">{readout}</span>
     </Row>
   )
 }

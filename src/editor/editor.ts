@@ -115,6 +115,7 @@ import {
 } from '../model/units'
 import { exportPdf, exportPsd, exportSvg, exportTiff, importPsd, looksLikePsd, outsideCanvas, sliceNodes, type ExportOptions } from '../model/export'
 import { TOOL_KEYS } from '../input/shortcuts'
+import { defaultLabelUnit } from '../model/factory'
 
 export type Tool =
   | 'select'
@@ -258,6 +259,9 @@ export class Editor {
   textSelection: { start: number; end: number } = { start: 0, end: 0 }
   anchor: { id: string; index: number } | null = null
   lastPointer: PointerInput | null = null
+  /** Size of the canvas in CSS pixels, kept current by the app so placements can target the visible area. */
+  viewport: { width: number; height: number } | null = null
+  private placeCount = 0
   private textUndoArmed = false
   private lastTextClick = { time: 0, id: '' }
   customLibraries: CustomLibrary[] = []
@@ -303,6 +307,12 @@ export class Editor {
       x: (pointer.cx - this.view.panX) / this.view.zoom,
       y: (pointer.cy - this.view.panY) / this.view.zoom,
     }
+  }
+
+  /** Paper point at the middle of the visible canvas (or of the page when the viewport is unknown). */
+  viewCenter(): Pt {
+    if (this.viewport) return this.toPaper({ cx: this.viewport.width / 2, cy: this.viewport.height / 2 })
+    return { x: this.doc.canvas.width / 2, y: this.doc.canvas.height / 2 }
   }
 
   toClient(paper: Pt): Pt {
@@ -744,7 +754,15 @@ export class Editor {
     const bounds = this.preview.dimension
       ? { w: Math.abs(this.preview.dimension.x2 - this.preview.dimension.x1), h: Math.abs(this.preview.dimension.y2 - this.preview.dimension.y1) }
       : commandsBounds(this.preview.commands)
-    this.readout = `${this.formatPoints(bounds.w)} × ${this.formatPoints(bounds.h)}`
+    if (this.tool === 'line') {
+      // A line is better described by its length and direction than by its bounding box.
+      const dx = paper.x - this.drag.start.x
+      const dy = paper.y - this.drag.start.y
+      const angle = Math.round((((-Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360) * 10) / 10
+      this.readout = `${this.formatPoints(Math.hypot(dx, dy))} · ${angle}°`
+    } else {
+      this.readout = `${this.formatPoints(bounds.w)} × ${this.formatPoints(bounds.h)}`
+    }
     this.gaps = this.measureGaps(this.preview)
     if (emit) {
       this.loupe = pointer.type === 'touch'
@@ -1556,10 +1574,19 @@ export class Editor {
   }
 
   /** A scale statement like 1/4 in = 1 ft. */
-  setScaleStatement(paperAmount: number, paperUnit: BaseUnit, realAmount: number, realUnit: LabelUnit): void {
+  setScaleStatement(paperAmount: number, paperUnit: BaseUnit, realAmount: number, realUnit: LabelUnit, statement?: string): void {
     this.guard(() => {
       this.snapshot()
-      this.doc.canvas.realInchesPerPoint = scaleFromStatement(paperAmount, paperUnit, realAmount, realUnit)
+      const canvas = this.doc.canvas
+      const wasDefaultUnit = canvas.labelUnit === defaultLabelUnit(canvas.baseUnit) || (canvas.scaleStatement != null && canvas.labelUnit === canvas.scaleLabelUnit)
+      canvas.realInchesPerPoint = scaleFromStatement(paperAmount, paperUnit, realAmount, realUnit)
+      canvas.scaleStatement = statement ?? `${paperAmount} ${paperUnit} = ${realAmount} ${realUnit}`
+      // A scale stated in feet means the user thinks in feet: switch labels to feet and inches unless they chose a unit themselves.
+      const labels: LabelUnit = realUnit === 'ft' ? 'ft-in' : realUnit
+      if (wasDefaultUnit) {
+        canvas.labelUnit = labels
+        canvas.scaleLabelUnit = labels
+      }
       this.emit()
     })
   }
@@ -2735,12 +2762,20 @@ export class Editor {
     })
   }
 
-  placeSymbol(id: string, x = 48, y = 48, center = false): string {
+  placeSymbol(id: string, x?: number, y?: number, center = false): string {
     const item = [...CATALOG, ...this.customLibrary].find((entry) => entry.id === id)
     if (!item) throw new Error('Symbol not found')
     this.snapshot()
     const width = worldInchesToPaperPoints(item.worldWidth, this.doc.canvas.realInchesPerPoint)
     const height = worldInchesToPaperPoints(item.worldHeight, this.doc.canvas.realInchesPerPoint)
+    if (x == null || y == null) {
+      // No position given: drop it in the middle of what the user is looking at, stepping each repeat so copies do not stack.
+      const at = this.viewCenter()
+      const step = (12 * (this.placeCount++ % 8)) / this.view.zoom
+      x = at.x - width / 2 + step
+      y = at.y - height / 2 + step
+      center = false
+    }
     const sx = width / item.worldWidth
     const sy = height / item.worldHeight
     const node = makePath(item.name, center ? x - width / 2 : x, center ? y - height / 2 : y, scaleCommands(item.commands, sx, sy))

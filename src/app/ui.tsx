@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { cssColor, fromHex, hsbToRgb, rgb, rgbToCmyk, rgbToHsb, toHex, toRgb } from '../model/color'
 import { splitShade } from '../model/shading'
 import type { Cmd, Color } from '../model/types'
@@ -58,6 +58,61 @@ export function Field({
         }}
       />
     </label>
+  )
+}
+
+/**
+ * A name that turns into a text box on double-click (or via the rename button) and commits on Enter or blur.
+ * Replaces window.prompt, which some embedded browsers block and which gave no hint that double-click renames.
+ */
+export function InlineName({
+  value,
+  onRename,
+  onClick,
+  children,
+  className,
+  testId,
+  label,
+}: {
+  value: string
+  onRename: (name: string) => void
+  onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void
+  children?: ReactNode
+  className?: string
+  testId?: string
+  label: string
+}) {
+  const [editing, setEditing] = useState(false)
+  if (editing) {
+    return (
+      <input
+        className={className ? `${className} inline-name` : 'inline-name'}
+        data-testid={testId ? `${testId}-input` : undefined}
+        aria-label={`Rename ${label}`}
+        autoFocus
+        defaultValue={value}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={(event) => {
+          event.stopPropagation()
+          if (event.key === 'Enter') {
+            const next = event.currentTarget.value.trim()
+            if (next && next !== value) onRename(next)
+            setEditing(false)
+          }
+          if (event.key === 'Escape') setEditing(false)
+        }}
+        onBlur={(event) => {
+          const next = event.currentTarget.value.trim()
+          if (next && next !== value) onRename(next)
+          setEditing(false)
+        }}
+      />
+    )
+  }
+  return (
+    <button className={className} data-testid={testId} title="Double-click to rename" onClick={onClick} onDoubleClick={() => setEditing(true)}>
+      {children ?? value}
+    </button>
   )
 }
 

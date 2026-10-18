@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { BLEND_MODES, type BlendMode, type Layer, type SceneNode } from '../../model/types'
 import { OrgIcon, type OrgIconName } from '../icons'
 import { editor } from '../instance'
-import { Row, Slider } from '../ui'
+import { InlineName, Row, Slider } from '../ui'
 
 type ActionGroup = 'arrange' | 'combine' | 'path'
 
@@ -10,10 +10,8 @@ const ACTION_GROUPS: { id: ActionGroup; label: string; hint: string; actions: { 
   {
     id: 'arrange',
     label: 'Arrange',
-    hint: 'Keep shapes together, or use one shape to hide another.',
+    hint: 'Use one shape to hide another, or cut holes. Group, ungroup, and stacking order live in Properties > Align and the right-click menu.',
     actions: [
-      { id: 'group', label: 'Group', shortcut: '⌘G', icon: 'group', detail: 'Move and resize the selection as one object.', run: () => editor.group() },
-      { id: 'ungroup', label: 'Ungroup', shortcut: '⌘⇧G', icon: 'ungroup', detail: 'Separate a group back into its shapes.', run: () => editor.ungroup() },
       { id: 'clip', label: 'Mask', detail: 'Hide everything outside the front shape.', run: () => editor.clipSelection() },
       { label: 'Release mask', detail: 'Show the shapes a mask was hiding.', run: () => editor.releaseClip() },
       { id: 'compound', label: 'Compound', shortcut: '⌘8', detail: 'Turn overlapping areas into holes.', run: () => editor.compound() },
@@ -51,7 +49,6 @@ const ACTION_GROUPS: { id: ActionGroup; label: string; hint: string; actions: { 
 
 export function LayersPanel() {
   const doc = editor.doc
-  const [renaming, setRenaming] = useState<string | null>(null)
   const [actionGroup, setActionGroup] = useState<ActionGroup>('arrange')
   const active = doc.layers.find((layer) => layer.id === doc.activeLayerId)
   const actions = ACTION_GROUPS.find((group) => group.id === actionGroup) ?? ACTION_GROUPS[0]
@@ -66,7 +63,7 @@ export function LayersPanel() {
       </Row>
       <div className="layer-list">
         {[...doc.layers].reverse().map((layer) => (
-          <LayerRow key={layer.id} layer={layer} renaming={renaming === layer.id} onRename={(on) => setRenaming(on ? layer.id : null)} />
+          <LayerRow key={layer.id} layer={layer} />
         ))}
       </div>
       {active && (
@@ -106,36 +103,17 @@ export function LayersPanel() {
   )
 }
 
-function LayerRow({ layer, renaming, onRename }: { layer: Layer; renaming: boolean; onRename: (on: boolean) => void }) {
+function LayerRow({ layer }: { layer: Layer }) {
   const active = layer.id === editor.doc.activeLayerId
   return (
     <div className="layer-row" data-testid="layer" data-active={active}>
-      <button className="icon-button" aria-label={layer.visible ? 'Hide layer' : 'Show layer'} data-testid="layer-visible" onClick={() => editor.setLayer(layer.id, { visible: !layer.visible })}>{layer.visible ? '●' : '○'}</button>
-      <button className="icon-button" aria-label={layer.locked ? 'Unlock layer' : 'Lock layer'} onClick={() => editor.toggleLock(layer.id)}>{layer.locked ? '🔒' : '🔓'}</button>
-      {renaming ? (
-        <input
-          autoFocus
-          defaultValue={layer.name}
-          onKeyDown={(event) => {
-            event.stopPropagation()
-            if (event.key === 'Enter') {
-              editor.renameLayer(layer.id, event.currentTarget.value)
-              onRename(false)
-            }
-            if (event.key === 'Escape') onRename(false)
-          }}
-          onBlur={(event) => {
-            editor.renameLayer(layer.id, event.currentTarget.value)
-            onRename(false)
-          }}
-        />
-      ) : (
-        <button className="grow name" data-testid="layer-name" onClick={() => editor.setActiveLayer(layer.id)} onDoubleClick={() => onRename(true)}>
-          {layer.name} <small>({layer.children.length})</small>
-        </button>
-      )}
-      <button className="icon-button" aria-label="Move layer up" onClick={() => editor.moveLayer(layer.id, 'up')}>↑</button>
-      <button className="icon-button" aria-label="Move layer down" onClick={() => editor.moveLayer(layer.id, 'down')}>↓</button>
+      <button className="icon-button" aria-label={layer.visible ? 'Hide layer' : 'Show layer'} title={layer.visible ? 'Visible. Click to hide this layer.' : 'Hidden. Click to show this layer.'} data-testid="layer-visible" onClick={() => editor.setLayer(layer.id, { visible: !layer.visible })}><OrgIcon name={layer.visible ? 'eye' : 'eye-off'} /></button>
+      <button className="icon-button" aria-label={layer.locked ? 'Unlock layer' : 'Lock layer'} title={layer.locked ? 'Locked: nothing on this layer can be drawn or moved. Click to unlock.' : 'Unlocked. Click to lock this layer.'} data-testid="layer-lock" data-locked={layer.locked} onClick={() => editor.toggleLock(layer.id)}><OrgIcon name={layer.locked ? 'lock' : 'unlock'} /></button>
+      <InlineName className="grow name" testId="layer-name" label="layer" value={layer.name} onClick={() => editor.setActiveLayer(layer.id)} onRename={(name) => editor.renameLayer(layer.id, name)}>
+        {layer.name} <small>({layer.children.length})</small>
+      </InlineName>
+      <button className="icon-button" aria-label="Move layer up" title="Move layer up" onClick={() => editor.moveLayer(layer.id, 'up')}>↑</button>
+      <button className="icon-button" aria-label="Move layer down" title="Move layer down" onClick={() => editor.moveLayer(layer.id, 'down')}>↓</button>
     </div>
   )
 }
@@ -145,18 +123,11 @@ function ObjectRow({ node, depth }: { node: SceneNode; depth: number }) {
   return (
     <>
       <div className="object-row" data-testid="object-row" data-active={selected} style={{ paddingLeft: 8 + depth * 14 }}>
-        <button className="icon-button" aria-label={node.visible ? 'Hide object' : 'Show object'} onClick={() => editor.setNodeVisible(node.id, !node.visible)}>{node.visible ? '●' : '○'}</button>
-        <button className="icon-button" aria-label={node.locked ? 'Unlock object' : 'Lock object'} onClick={() => editor.toggleLock(node.id)}>{node.locked ? '🔒' : ''}</button>
-        <button
-          className="grow name"
-          onClick={(event) => editor.selectNode(node.id, event.shiftKey || event.metaKey)}
-          onDoubleClick={() => {
-            const name = window.prompt('Object name', node.name)
-            if (name != null) editor.renameNode(node.id, name)
-          }}
-        >
+        <button className="icon-button" aria-label={node.visible ? 'Hide object' : 'Show object'} title={node.visible ? 'Visible. Click to hide.' : 'Hidden. Click to show.'} onClick={() => editor.setNodeVisible(node.id, !node.visible)}><OrgIcon name={node.visible ? 'eye' : 'eye-off'} /></button>
+        <button className="icon-button" aria-label={node.locked ? 'Unlock object' : 'Lock object'} title={node.locked ? 'Locked. Click to unlock.' : 'Unlocked. Click to lock.'} data-locked={node.locked} onClick={() => editor.toggleLock(node.id)}><OrgIcon name={node.locked ? 'lock' : 'unlock'} /></button>
+        <InlineName className="grow name" testId="object-name" label="object" value={node.name} onClick={(event) => editor.selectNode(node.id, event.shiftKey || event.metaKey)} onRename={(name) => editor.renameNode(node.id, name)}>
           {node.name} <small>{node.kind}</small>
-        </button>
+        </InlineName>
       </div>
       {node.kind === 'group' && [...node.children].reverse().map((child) => <ObjectRow key={child.id} node={child} depth={depth + 1} />)}
     </>

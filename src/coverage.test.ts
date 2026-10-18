@@ -5,7 +5,7 @@ import { exportSvg, importPsd, looksLikePsd } from './model/export'
 import { cmd, commandsBounds, localBounds, paperBounds } from './model/geometry'
 import { splitShade } from './model/shading'
 import { separateContours } from './model/transform'
-import { makeRect } from './model/factory'
+import { findNode, makeRect } from './model/factory'
 import {
   paperPointsToWorldInches,
   parseLength,
@@ -1796,6 +1796,65 @@ Object.assign(cases, {
     expect(TOOL_INFO.roundRect.name).toBe('Rounded rectangle')
     expect(TOOL_INFO.select.name).toBe('Select')
     expect(TOOL_INFO.pathSelect.name).toBe('Direct select')
+  },
+  'symbol-view-center'() {
+    // Clicking a symbol drops it in the middle of the visible canvas, and repeats step aside instead of stacking.
+    const app = editor()
+    app.view = { zoom: 2, panX: -100, panY: -50 }
+    app.viewport = { width: 800, height: 600 }
+    const center = app.viewCenter()
+    expect(center).toEqual({ x: (400 + 100) / 2, y: (300 + 50) / 2 })
+    const first = findNode(app.doc, app.placeSymbol('floor-plan-svg-singledoor'))!
+    const second = findNode(app.doc, app.placeSymbol('floor-plan-svg-singledoor'))!
+    const a = paperBounds(first)
+    const b = paperBounds(second)
+    expect(a.x + a.w / 2).toBeCloseTo(center.x, 3)
+    expect(a.y + a.h / 2).toBeCloseTo(center.y, 3)
+    // 12 screen px at zoom 2 = 6 paper points.
+    expect(b.x - a.x).toBeCloseTo(6, 3)
+    expect(b.y - a.y).toBeCloseTo(6, 3)
+    // An explicit position still wins (plugins and drops use it).
+    const third = findNode(app.doc, app.placeSymbol('floor-plan-svg-singledoor', 10, 20))!
+    expect(paperBounds(third)).toMatchObject({ x: 10, y: 20 })
+    // Without a viewport the page center is used.
+    const bare = editor()
+    expect(bare.viewCenter()).toEqual({ x: bare.doc.canvas.width / 2, y: bare.doc.canvas.height / 2 })
+  },
+  'line-readout-angle'() {
+    const app = editor()
+    app.setTool('line')
+    app.pointerDown(pointer(0, 100))
+    app.pointerMove(pointer(300, 100))
+    expect(app.readout).toBe(`${app.formatPoints(300)} · 0°`)
+    app.pointerMove(pointer(300, -200))
+    expect(app.readout).toBe(`${app.formatPoints(Math.hypot(300, 300))} · 45°`)
+    app.pointerUp(pointer(300, -200))
+    // Other tools keep the width × height readout.
+    app.setTool('rect')
+    app.pointerDown(pointer(0, 0))
+    app.pointerMove(pointer(40, 30))
+    expect(app.readout).toContain('×')
+    app.pointerUp(pointer(40, 30))
+  },
+  'scale-statement-echo'() {
+    const app = editor()
+    expect(app.doc.canvas.labelUnit).toBe('in')
+    app.setScaleStatement(0.25, 'in', 1, 'ft', '1/4 in = 1 ft')
+    expect(app.doc.canvas.scaleStatement).toBe('1/4 in = 1 ft')
+    expect(app.doc.canvas.realInchesPerPoint).toBeCloseTo(quarterInchFootScale())
+    // A scale in feet moves the default label unit to feet-and-inches so a 40 ft wall does not read "480 in".
+    expect(app.doc.canvas.labelUnit).toBe('ft-in')
+    // A unit the user picked by hand is kept.
+    app.setLabelUnit('m')
+    app.setScaleStatement(1, 'cm', 1, 'm')
+    expect(app.doc.canvas.labelUnit).toBe('m')
+    expect(app.doc.canvas.scaleStatement).toBe('1 cm = 1 m')
+    // But a unit a previous statement chose follows the next statement.
+    const other = editor()
+    other.setScaleStatement(1, 'in', 1, 'ft')
+    expect(other.doc.canvas.labelUnit).toBe('ft-in')
+    other.setScaleStatement(1, 'cm', 1, 'm')
+    expect(other.doc.canvas.labelUnit).toBe('m')
   },
   'help-manual-complete'() {
     // Every tool and every pane has a topic; ids are unique; search finds things by plain words.

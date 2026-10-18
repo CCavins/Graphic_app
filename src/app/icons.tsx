@@ -15,6 +15,10 @@ export type OrgIconName =
   | 'forward'
   | 'backward'
   | 'back'
+  | 'eye'
+  | 'eye-off'
+  | 'lock'
+  | 'unlock'
 
 /** Original icons for the same arrange, group, and align commands Graphic puts in its Alignment pane. */
 export function OrgIcon({ name }: { name: OrgIconName }) {
@@ -149,6 +153,34 @@ export function OrgIcon({ name }: { name: OrgIconName }) {
         <svg {...common}>
           <rect x="4" y="4" width="11" height="11" {...back} />
           <rect x="8" y="8" width="11" height="11" {...front} />
+        </svg>
+      )
+    case 'eye':
+      return (
+        <svg {...common}>
+          <path d="M2.5 12c2.5-4.5 5.7-6.5 9.5-6.5s7 2 9.5 6.5c-2.5 4.5-5.7 6.5-9.5 6.5S5 16.5 2.5 12z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      )
+    case 'eye-off':
+      return (
+        <svg {...common} opacity={0.45}>
+          <path d="M2.5 12c2.5-4.5 5.7-6.5 9.5-6.5s7 2 9.5 6.5c-2.5 4.5-5.7 6.5-9.5 6.5S5 16.5 2.5 12z" />
+          <path d="M4 20 20 4" />
+        </svg>
+      )
+    case 'lock':
+      return (
+        <svg {...common}>
+          <rect x="5" y="10.5" width="14" height="10" rx="1.5" {...front} />
+          <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+        </svg>
+      )
+    case 'unlock':
+      return (
+        <svg {...common} opacity={0.45}>
+          <rect x="5" y="10.5" width="14" height="10" rx="1.5" />
+          <path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7" />
         </svg>
       )
   }

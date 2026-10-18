@@ -14,7 +14,7 @@ import { LayersPanel } from './panels/Layers'
 import { LibrariesPanel } from './panels/Libraries'
 import { PropertiesPanel } from './panels/Properties'
 import { TOOL_INFO, TOOLS } from './toolInfo'
-import { ColorWell } from './ui'
+import { ColorWell, InlineName } from './ui'
 import './styles.css'
 
 const PANES = ['Properties', 'Appearance', 'Layers', 'Libraries'] as const
@@ -107,6 +107,7 @@ export function App() {
     if (!canvas) return
     const draw = () => {
       const rect = canvas.getBoundingClientRect()
+      editor.viewport = { width: rect.width, height: rect.height }
       const dpr = window.devicePixelRatio || 1
       canvas.width = Math.max(1, Math.floor(rect.width * dpr))
       canvas.height = Math.max(1, Math.floor(rect.height * dpr))
@@ -208,27 +209,26 @@ export function App() {
         <strong className="brand">Measured</strong>
         <div className="doc-tabs" data-testid="doc-tabs">
           {editor.docs.map((doc, index) => (
-            <button
-              key={doc.id}
-              className="doc-tab"
-              data-testid="doc-tab"
-              data-active={index === editor.active}
-              onClick={() => editor.selectTab(index)}
-              onDoubleClick={() => {
-                const name = window.prompt('Document name', doc.name)
-                if (name) {
+            <span key={doc.id} className="doc-tab-wrap" data-active={index === editor.active}>
+              <InlineName
+                className="doc-tab"
+                testId="doc-tab"
+                label="document"
+                value={doc.name}
+                onClick={() => editor.selectTab(index)}
+                onRename={(name) => {
                   editor.selectTab(index)
                   editor.renameDocument(name)
-                }
-              }}
-            >
-              {doc.name}
+                }}
+              >
+                {doc.name}
+              </InlineName>
               {index === editor.active && editor.docs.length > 1 && (
-                <span className="close" role="button" aria-label="Close document" onClick={(event) => { event.stopPropagation(); editor.closeDocument() }}>×</span>
+                <button className="close" aria-label="Close document" title="Close document (Option-W)" onClick={() => editor.closeDocument()}>×</button>
               )}
-            </button>
+            </span>
           ))}
-          <button className="doc-tab add" data-testid="new-doc" aria-label="New document" onClick={() => setDialog('new')}>+</button>
+          <button className="doc-tab add" data-testid="new-doc" aria-label="New document" title="New document (Option-N)" onClick={() => setDialog('new')}>+</button>
         </div>
         <div className="doc-actions">
           <button data-testid="undo" onClick={() => editor.undo()} title="Undo ⌘Z">Undo</button>
@@ -326,9 +326,10 @@ export function App() {
         )}
         {(narrow || editor.lastPointer?.type === 'touch') && (
           <div className="chips" data-testid="modifier-chips">
-            <button className="chip" data-active={editor.touchMods.constrain} onClick={() => { editor.touchMods.constrain = !editor.touchMods.constrain; editor.emit() }}>Constrain</button>
-            <button className="chip" data-active={editor.touchMods.fromCenter} onClick={() => { editor.touchMods.fromCenter = !editor.touchMods.fromCenter; editor.emit() }}>From center</button>
-            <button className="chip" data-active={editor.touchMods.duplicate} onClick={() => { editor.touchMods.duplicate = !editor.touchMods.duplicate; editor.emit() }}>Duplicate</button>
+            <span className="chips-caption">Touch stand-ins for Shift and Option:</span>
+            <button className="chip" title="Like holding Shift: squares, circles, 45° lines" data-active={editor.touchMods.constrain} onClick={() => { editor.touchMods.constrain = !editor.touchMods.constrain; editor.emit() }}>Constrain</button>
+            <button className="chip" title="Like holding Option while drawing: grow from the center" data-active={editor.touchMods.fromCenter} onClick={() => { editor.touchMods.fromCenter = !editor.touchMods.fromCenter; editor.emit() }}>From center</button>
+            <button className="chip" title="Like holding Option while dragging: move a copy" data-active={editor.touchMods.duplicate} onClick={() => { editor.touchMods.duplicate = !editor.touchMods.duplicate; editor.emit() }}>Duplicate</button>
           </div>
         )}
         {editor.context && <ContextMenu stage={stageRef.current} onHelp={() => openHelp('files-context-menu')} />}
@@ -341,6 +342,14 @@ export function App() {
             </button>
           ))}
         </div>
+        {narrow && sheet && (
+          <div className="sheet-head" data-testid="sheet-head">
+            <span className="sheet-handle" aria-hidden="true" />
+            <strong>{sheet}</strong>
+            <span className="hint">Tap the tab again or × to close</span>
+            <button className="icon-button" aria-label="Close panel" data-testid="sheet-close" onClick={() => setSheet(null)}>×</button>
+          </div>
+        )}
         <div className="panes">
           {PANES.map((pane) => (
             <section key={pane} className="pane" data-testid={`pane-${pane}`} data-open={paneOpen(pane)}>

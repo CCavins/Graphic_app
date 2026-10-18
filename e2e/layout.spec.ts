@@ -38,8 +38,17 @@ for (const size of sizes) {
       await expect(page.getByTestId('section-canvas')).toBeVisible()
       const body = await page.locator('[data-testid=pane-Properties] .pane-body').boundingBox()
       expect(body?.height ?? 0).toBeGreaterThan(100)
+      // The sheet names itself and has a close button (sheet-header).
+      await expect(page.getByTestId('sheet-head')).toContainText('Properties')
+      await page.getByTestId('sheet-close').click()
+      await expect(page.getByTestId('section-canvas')).toBeHidden()
+      await expect(page.getByTestId('sheet-head')).toHaveCount(0)
+      await page.getByTestId('tab-Properties').click()
+      await expect(page.getByTestId('section-canvas')).toBeVisible()
       await page.getByTestId('tab-Properties').click()
       await expect(page.getByTestId('section-canvas')).toBeHidden()
+      // Touch modifier chips carry a caption (chip-caption).
+      await expect(page.getByTestId('modifier-chips')).toContainText('Shift and Option')
       if (size.width < 600) {
         await page.getByTestId('file-menu').click()
         await expect(page.getByTestId('export-open')).toBeVisible()

@@ -7,6 +7,7 @@ import type {
   CanvasStyle,
   Doc,
   EffectKind,
+  LabelUnit,
   Layer,
   Precision,
   SceneNode,
@@ -127,13 +128,18 @@ export function makeDimension(x1: number, y1: number, x2: number, y2: number, of
   return node
 }
 
+/** The label unit a fresh document uses for a given ruler unit. */
+export function defaultLabelUnit(baseUnit: BaseUnit): LabelUnit {
+  return baseUnit === 'px' ? 'px' : baseUnit === 'mm' ? 'mm' : baseUnit === 'cm' ? 'cm' : 'in'
+}
+
 export function defaultCanvas(width: number, height: number, baseUnit: BaseUnit): CanvasSettings {
   return {
     width,
     height,
     baseUnit,
     realInchesPerPoint: oneToOneScale(),
-    labelUnit: baseUnit === 'px' ? 'px' : baseUnit === 'mm' ? 'mm' : baseUnit === 'cm' ? 'cm' : 'in',
+    labelUnit: defaultLabelUnit(baseUnit),
     precision: defaultPrecision(),
     showUnits: true,
     background: rgb(255, 255, 255, 1),
