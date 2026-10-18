@@ -292,6 +292,75 @@ test('pointer-move performance in outline mode', async ({ page }) => {
   expect(median).toBeLessThan(32)
 })
 
+test('escape closes a dialog from inside it and cancels recolor (dialog-escape)', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  const hex = () => page.evaluate(() => {
+    const editor = window.__measured!.editor
+    return editor.hexOf(editor.fillOf(editor.one()!)!.color)
+  })
+  const before = await hex()
+  await page.getByTestId('section-styles').click()
+  await page.getByTestId('recolor').click()
+  await page.getByTestId('recolor-hue').fill('0.3')
+  expect(await hex()).not.toBe(before)
+  // Focus is on the slider inside the dialog; Escape must still close it and put the color back.
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('recolor-dialog')).toBeHidden()
+  expect(await hex()).toBe(before)
+  await page.getByTestId('export-open').click()
+  await page.getByTestId('export-format').focus()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('export-dialog')).toBeHidden()
+})
+
+test('reload keeps every tab, custom libraries, and plugins (workspace-autosave)', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  await page.getByTestId('new-doc').click()
+  await page.getByTestId('new-name').fill('Second')
+  await page.getByTestId('new-name').press('Enter')
+  await page.getByTestId('new-create').click()
+  await expect(page.getByTestId('doc-tab')).toHaveCount(2)
+  await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    editor.createLibrary('Kept')
+    editor.savePlugin('Kept plugin', 'api.createRect(0, 0, 10, 10)')
+  })
+  await page.waitForTimeout(2600)
+  await page.reload()
+  await expect(page.getByTestId('doc-tab')).toHaveCount(2)
+  const state = await page.evaluate(() => {
+    const editor = window.__measured!.editor
+    return { active: editor.doc.name, firstTabNodes: editor.docs[0].layers[0].children.length, libraries: editor.customLibraries.map((item) => item.name), plugins: editor.plugins.map((item) => item.name) }
+  })
+  expect(state).toEqual({ active: 'Second', firstTabNodes: 1, libraries: ['Kept'], plugins: ['Kept plugin'] })
+})
+
+test('closing a document with content asks first (close-confirm)', async ({ page }) => {
+  await page.goto('./')
+  await drawRect(page)
+  await page.getByTestId('new-doc').click()
+  await page.getByTestId('new-create').click()
+  await page.getByTestId('doc-tab').first().click()
+  page.once('dialog', (dialog) => void dialog.dismiss())
+  await page.locator('.doc-tab .close').click()
+  await expect(page.getByTestId('doc-tab')).toHaveCount(2)
+  page.once('dialog', (dialog) => void dialog.accept())
+  await page.locator('.doc-tab .close').click()
+  await expect(page.getByTestId('doc-tab')).toHaveCount(1)
+})
+
+test('drawing on a locked layer explains itself (locked-layer-draw)', async ({ page }) => {
+  await page.goto('./')
+  await page.getByTestId('tab-Layers').click()
+  await page.locator('[data-testid=layer] [aria-label="Lock layer"]').first().click()
+  await drawRect(page)
+  await expect(page.getByTestId('banner')).toContainText(/locked/i)
+  const count = await page.evaluate(() => window.__measured!.editor.doc.layers[0].children.length)
+  expect(count).toBe(0)
+})
+
 test('export svg from the dialog', async ({ page }) => {
   await page.goto('./')
   await drawRect(page)

@@ -22,6 +22,10 @@ for (const size of sizes) {
     if (!toolbar || !canvas || !inspector) return
     expect(canvas.width).toBeGreaterThan(100)
     expect(canvas.height).toBeGreaterThan(80)
+    // The page never scrolls sideways: every bar fits the viewport (narrow-overflow).
+    const overflow = await page.evaluate(() => ({ w: document.documentElement.scrollWidth, inner: window.innerWidth, canvas: document.querySelector('[data-testid=canvas]')!.getBoundingClientRect().width }))
+    expect(overflow.w).toBeLessThanOrEqual(overflow.inner + 1)
+    expect(overflow.canvas).toBeLessThanOrEqual(size.width)
     if (size.toolbar === 'side') {
       expect(toolbar.x).toBeLessThan(40)
       expect(toolbar.height).toBeGreaterThan(200)
@@ -29,6 +33,17 @@ for (const size of sizes) {
     } else {
       expect(toolbar.y).toBeGreaterThan(size.height * 0.55)
       expect(toolbar.width).toBeGreaterThan(size.width * 0.8)
+      // Tapping a pane tab opens a usable sheet (narrow-sheet-opens).
+      await page.getByTestId('tab-Properties').click()
+      await expect(page.getByTestId('section-canvas')).toBeVisible()
+      const body = await page.locator('[data-testid=pane-Properties] .pane-body').boundingBox()
+      expect(body?.height ?? 0).toBeGreaterThan(100)
+      await page.getByTestId('tab-Properties').click()
+      await expect(page.getByTestId('section-canvas')).toBeHidden()
+      if (size.width < 600) {
+        await page.getByTestId('file-menu').click()
+        await expect(page.getByTestId('export-open')).toBeVisible()
+      }
     }
   })
 }

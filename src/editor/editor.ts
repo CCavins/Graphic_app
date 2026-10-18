@@ -101,6 +101,7 @@ import type {
   TextData,
   TextSpan,
   TransformStep,
+  WorkspaceFile,
 } from '../model/types'
 import { APPEARANCE_CAP, HISTORY_CAP, MAX_ZOOM, MIN_ZOOM, uid } from '../model/types'
 import {
@@ -205,6 +206,8 @@ interface Drag {
   moved: boolean
   pointerId: number
   duplicated?: boolean
+  /** The objects an Option-drag copied from, so an unmoved copy can be taken back. */
+  sourceIds?: string[]
   axis?: 'h' | 'v'
   anchorIndex?: number
 }
@@ -267,6 +270,8 @@ export class Editor {
   clipboard: AppearanceItem[] | null = null
   clipboardNodes: SceneNode[] | null = null
   lastStep: TransformStep | null = null
+  /** Asked before a document with content is closed; the app wires this to a confirm dialog. */
+  confirmClose: (name: string) => boolean = () => true
   private recolorBase: Map<string, SceneNode> | null = null
   private past: Doc[][] = []
   private future: Doc[][] = []
@@ -378,6 +383,13 @@ export class Editor {
     this.selection = [node.id]
   }
 
+  /** Snapshot and add a freshly drawn node, checking the lock first so a refused draw leaves no dead undo step. */
+  private place(node: SceneNode): void {
+    if (activeLayer(this.doc).locked) throw new Error('The active layer is locked. Unlock it in the Layers pane to draw on it.')
+    this.snapshot()
+    this.addNode(node)
+  }
+
   /** Apply the toolbar paint (color wells, dash) to a freshly drawn shape. */
   private paintNew(node: SceneNode): SceneNode {
     const fill = node.appearance.find((item): item is FillAttr => item.kind === 'fill')
@@ -392,6 +404,8 @@ export class Editor {
   }
 
   setTool(tool: Tool): void {
+    // An unfinished pen path is kept, not thrown away, when the user moves on.
+    if (this.pen.length >= 2) this.commitPen()
     this.tool = tool
     this.preview = null
     this.pen = []
@@ -559,7 +573,9 @@ export class Editor {
       const loneDimension = this.selection.length === 1 && this.one()?.kind === 'dimension'
       const handle = loneDimension ? null : this.hitHandle(paper, pointer.type)
       if (handle && this.selection.length) {
-        if (pointer.alt || this.touchMods.duplicate) this.duplicateSelection()
+        const sourceIds = [...this.selection]
+        const duplicated = pointer.alt || this.touchMods.duplicate
+        if (duplicated) this.duplicateSelection(0, 0, false)
         const frame = this.selectionFrame()!
         const pivot = {
           x: (frame.corners[0].x + frame.corners[2].x) / 2,
@@ -576,6 +592,8 @@ export class Editor {
           box: selectionBounds(this.doc, this.selection),
           moved: false,
           pointerId: pointer.pointerId,
+          duplicated,
+          sourceIds,
         }
         this.loupe = pointer.type === 'touch'
         return
@@ -596,8 +614,9 @@ export class Editor {
         } else if (!this.selection.includes(hit.id)) this.selection = [hit.id]
         this.activateLayerOf(hit.id)
         const duplicated = pointer.alt || this.touchMods.duplicate
-        if (duplicated) this.duplicateSelection()
-        this.drag = { kind: 'move', start: paper, origin: paper, ids: [...this.selection], origins: this.captureOrigins(), moved: false, pointerId: pointer.pointerId, duplicated }
+        const sourceIds = [...this.selection]
+        if (duplicated) this.duplicateSelection(0, 0, false)
+        this.drag = { kind: 'move', start: paper, origin: paper, ids: [...this.selection], origins: this.captureOrigins(), moved: false, pointerId: pointer.pointerId, duplicated, sourceIds }
       } else {
         if (!pointer.shift) this.selection = []
         this.anchor = null
@@ -739,6 +758,22 @@ export class Editor {
   }
 
   pointerUp(pointer: PointerInput): void {
+    try {
+      this.finishPointer(pointer)
+    } catch (error) {
+      // A refused draw (for example on a locked layer) ends the gesture and explains itself instead of throwing.
+      this.preview = null
+      this.stroke = []
+      this.strokePressure = []
+      this.pen = []
+      this.readout = ''
+      this.gaps = []
+      this.banner = error instanceof Error ? error.message : 'Something went wrong'
+      this.emit()
+    }
+  }
+
+  private finishPointer(pointer: PointerInput): void {
     this.pointers.delete(pointer.pointerId)
     if (this.drag?.kind === 'pinch') {
       if (this.pointers.size < 2) this.drag = null
@@ -787,10 +822,7 @@ export class Editor {
       return
     }
     if (drag.kind === 'pencil') {
-      if (this.stroke.length >= 2) {
-        this.snapshot()
-        this.addNode(this.paintNew(this.freehandNode()))
-      }
+      if (this.stroke.length >= 2) this.place(this.paintNew(this.freehandNode()))
       this.preview = null
       this.stroke = []
       this.strokePressure = []
@@ -817,8 +849,7 @@ export class Editor {
         this.emit()
         return
       }
-      this.snapshot()
-      this.addNode(this.tool === 'text' ? this.preview : this.paintNew(this.preview))
+      this.place(this.tool === 'text' ? this.preview : this.paintNew(this.preview))
       if (this.tool === 'text') this.editText(this.selection[0])
       this.preview = null
       this.pen = []
@@ -831,6 +862,10 @@ export class Editor {
           const node = first ? findNode(this.doc, first.id) : undefined
           if (node && first) this.lastStep = { ...IDENTITY_STEP, dx: node.x - first.x, dy: node.y - first.y }
         }
+      } else if (drag.duplicated) {
+        // An Option-click without a drag made copies that never moved: take them back and keep the originals selected.
+        for (const id of drag.ids) removeNode(this.doc, id)
+        this.selection = drag.sourceIds ?? []
       }
     }
     this.gaps = []
@@ -840,6 +875,8 @@ export class Editor {
   }
 
   cancel(): void {
+    // Escape finishes a pen path in progress rather than discarding it, as in other vector editors.
+    if (this.pen.length >= 2 && !this.drag) this.commitPen()
     this.preview = null
     this.drag = null
     this.pen = []
@@ -895,8 +932,7 @@ export class Editor {
       this.emit()
       return
     }
-    this.snapshot()
-    this.addNode(this.paintNew(this.freehandNode()))
+    this.place(this.paintNew(this.freehandNode()))
     this.preview = null
     this.pen = []
     this.stroke = []
@@ -904,18 +940,26 @@ export class Editor {
     this.emit()
   }
 
+  /**
+   * Record the state before a drag as one undo step. For an Option-drag the "before" is the document without
+   * the copies, so a single Undo removes the duplicate instead of only sliding it back onto the original.
+   */
   private snapshotAfter(drag: Drag): void {
     const current = structuredClone(this.doc)
-    drag.origins.forEach((origin) => {
-      const node = findNode(current, origin.id)
-      if (!node) return
-      node.x = origin.x
-      node.y = origin.y
-      node.rotation = origin.rotation
-      node.commands = structuredClone(origin.commands)
-      node.shade = origin.shade ? structuredClone(origin.shade) : undefined
-      node.ink = origin.ink ? structuredClone(origin.ink) : undefined
-    })
+    if (drag.duplicated) {
+      for (const id of drag.ids) removeNode(current, id)
+    } else {
+      drag.origins.forEach((origin) => {
+        const node = findNode(current, origin.id)
+        if (!node) return
+        node.x = origin.x
+        node.y = origin.y
+        node.rotation = origin.rotation
+        node.commands = structuredClone(origin.commands)
+        node.shade = origin.shade ? structuredClone(origin.shade) : undefined
+        node.ink = origin.ink ? structuredClone(origin.ink) : undefined
+      })
+    }
     const past = this.past[this.active]
     past.push(current)
     if (past.length > HISTORY_CAP) past.shift()
@@ -1348,8 +1392,8 @@ export class Editor {
     this.emit()
   }
 
-  private duplicateSelection(dx = 0, dy = 0): void {
-    this.snapshot()
+  private duplicateSelection(dx = 0, dy = 0, snapshot = true): void {
+    if (snapshot) this.snapshot()
     const copies = selectedNodes(this.doc, this.selection).map((node) => cloneNode(node, dx, dy))
     const layer = activeLayer(this.doc)
     layer.children.push(...copies)
@@ -1582,7 +1626,13 @@ export class Editor {
     this.emit()
   }
 
+  /** True when the active document has anything drawn on any layer. */
+  documentHasContent(): boolean {
+    return this.doc.layers.some((layer) => layer.children.length > 0)
+  }
+
   closeDocument(): void {
+    if (this.documentHasContent() && !this.confirmClose(this.doc.name)) return
     if (this.docs.length === 1) {
       this.docs[0] = makeDocument()
       this.past[0] = []
@@ -2849,6 +2899,40 @@ export class Editor {
     return JSON.stringify({ version: 1, document: this.doc } satisfies MeasuredFile)
   }
 
+  /** Everything worth restoring on reload: all tabs, the active tab, custom libraries, and plugins. */
+  serializeWorkspace(): string {
+    const workspace: WorkspaceFile = { version: 1, workspace: true, docs: this.docs, active: this.active, customLibraries: this.customLibraries, plugins: this.plugins }
+    return JSON.stringify(workspace)
+  }
+
+  /** Restore an autosaved workspace; older autosaves hold a single document and still load. */
+  loadWorkspace(text: string): void {
+    let parsed: Partial<WorkspaceFile> & Partial<MeasuredFile>
+    try {
+      parsed = JSON.parse(text) as Partial<WorkspaceFile> & Partial<MeasuredFile>
+    } catch {
+      throw new Error('Autosave is not readable')
+    }
+    if (!parsed.workspace) {
+      this.loadText(text)
+      return
+    }
+    const docs = Array.isArray(parsed.docs) ? parsed.docs.filter((doc) => doc?.layers && doc.canvas) : []
+    if (!docs.length) throw new Error('Autosave has no documents')
+    for (const doc of docs) {
+      migrate(doc)
+      this.detachDisjoint(doc)
+    }
+    this.docs = docs
+    this.past = docs.map(() => [])
+    this.future = docs.map(() => [])
+    this.active = Math.min(Math.max(0, parsed.active ?? 0), docs.length - 1)
+    this.selection = []
+    if (Array.isArray(parsed.customLibraries)) this.customLibraries = parsed.customLibraries as CustomLibrary[]
+    if (Array.isArray(parsed.plugins)) this.plugins = parsed.plugins
+    this.emit()
+  }
+
   loadText(text: string): void {
     this.guard(() => {
       let parsed: MeasuredFile
@@ -3098,8 +3182,9 @@ export class Editor {
 
   // ---------- keyboard ----------
 
-  key(key: string, mods: { shift?: boolean; alt?: boolean; meta?: boolean }, viewport?: { width: number; height: number }): void {
-    const lower = key.toLowerCase()
+  key(key: string, mods: { shift?: boolean; alt?: boolean; meta?: boolean }, viewport?: { width: number; height: number }, code?: string): void {
+    // Option on macOS turns letters into symbols ("˜", "∑"), so Alt shortcuts match the physical key as well.
+    const lower = mods.alt && code?.startsWith('Key') ? code.slice(3).toLowerCase() : key.toLowerCase()
     if (lower === 'escape') this.cancel()
     if ((lower === 'z' && mods.meta && !mods.shift) || lower === 'undo') this.undo()
     if ((lower === 'z' && mods.meta && mods.shift) || lower === 'redo') this.redo()
@@ -3156,10 +3241,14 @@ export class Editor {
 
   commitPen(): void {
     if (this.pen.length < 2) return
-    this.snapshot()
-    this.addNode(this.paintNew(makePath('Path', 0, 0, this.pen)))
+    const commands = this.pen
     this.pen = []
     this.preview = null
+    try {
+      this.place(this.paintNew(makePath('Path', 0, 0, commands)))
+    } catch (error) {
+      this.banner = error instanceof Error ? error.message : 'Could not finish the path'
+    }
     this.emit()
   }
 

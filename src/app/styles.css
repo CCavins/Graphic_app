@@ -47,7 +47,11 @@ code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
   padding: 0 10px;
   background: #dfe4ea;
   border-bottom: 1px solid var(--line);
+  position: relative;
+  min-width: 0;
+  overflow: visible;
 }
+.doc-menu { position: absolute; z-index: 9; }
 .brand { align-self: center; font-size: 14px; letter-spacing: 0.02em; }
 .doc-tabs { display: flex; align-items: flex-end; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; }
 .doc-tab {
@@ -399,7 +403,8 @@ canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: 
 
 @media (max-width: 1023px) {
   .app {
-    grid-template-columns: 1fr;
+    /* minmax(0, …) keeps a wide doc bar or options bar from pushing the page wider than the screen. */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 38px 40px minmax(0, 1fr) auto auto;
   }
   .doc-bar { grid-row: 1; }
@@ -432,9 +437,14 @@ canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: 
   .pane-tab { white-space: nowrap; }
   .pane { border-bottom: 0; }
   .pane[data-open="false"] { display: none; }
-  .pane[data-open="true"] { min-height: 0; }
-  .panes { max-height: 42vh; }
+  /* The sheet has no fixed height, so the open pane must size to its content instead of a zero flex basis. */
+  .pane[data-open="true"] { flex: 0 0 auto; min-height: 0; }
+  .pane[data-open="true"] .pane-body { flex: 0 0 auto; overflow: visible; }
+  .panes { flex: 0 0 auto; max-height: 45vh; overflow: auto; -webkit-overflow-scrolling: touch; }
   .inspector[data-sheet="closed"] .panes { display: none; }
+  .doc-bar { min-width: 0; }
+  .doc-actions { flex: 0 0 auto; }
+  .doc-menu { top: 40px; right: 8px; left: auto; }
   .two-col { grid-template-columns: 1fr; }
   .style-grid { grid-template-columns: repeat(2, 1fr); }
 }

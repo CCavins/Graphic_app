@@ -1643,6 +1643,132 @@ Object.assign(cases, {
     app.pointerUp(pointer(50, 178))
     expect(paperBounds(dim).y).toBeCloseTo(before.y + 50)
   },
+  'locked-layer-draw'() {
+    const app = editor()
+    app.doc.layers[0].locked = true
+    app.setTool('rect')
+    app.pointerDown(pointer(0, 0))
+    app.pointerMove(pointer(50, 40))
+    expect(() => app.pointerUp(pointer(50, 40))).not.toThrow()
+    expect(app.doc.layers[0].children).toHaveLength(0)
+    expect(app.banner).toMatch(/locked/i)
+    expect(app.historySize()).toBe(0)
+    expect(app.preview).toBeNull()
+  },
+  'alt-dup-undo'() {
+    const app = editor()
+    const node = makeRect(0, 0, 20, 20)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    app.pointerDown(pointer(10, 10, { alt: true }))
+    app.pointerMove(pointer(60, 10, { alt: true }))
+    app.pointerUp(pointer(60, 10, { alt: true }))
+    expect(app.doc.layers[0].children).toHaveLength(2)
+    expect(app.historySize()).toBe(1)
+    app.undo()
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    expect(app.doc.layers[0].children[0].x).toBe(0)
+    // An Option-click that never drags leaves nothing behind.
+    app.selection = [node.id]
+    app.pointerDown(pointer(10, 10, { alt: true }))
+    app.pointerUp(pointer(10, 10, { alt: true }))
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    expect(app.selection).toEqual([node.id])
+  },
+  'pen-switch-commits'() {
+    const app = editor()
+    app.setTool('pen')
+    for (const [x, y] of [[0, 0], [30, 10], [40, 40]]) {
+      app.pointerDown(pointer(x, y))
+      app.pointerUp(pointer(x, y))
+    }
+    expect(app.pen).toHaveLength(3)
+    app.setTool('rect')
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    expect(app.doc.layers[0].children[0].commands).toHaveLength(3)
+    app.setTool('pen')
+    app.pointerDown(pointer(0, 0))
+    app.pointerUp(pointer(0, 0))
+    app.pointerDown(pointer(50, 0))
+    app.pointerUp(pointer(50, 0))
+    app.key('Escape', {})
+    expect(app.doc.layers[0].children).toHaveLength(2)
+    expect(app.pen).toHaveLength(0)
+    // A single point is not a path and is dropped.
+    app.pointerDown(pointer(5, 5))
+    app.pointerUp(pointer(5, 5))
+    app.setTool('select')
+    expect(app.doc.layers[0].children).toHaveLength(2)
+  },
+  'snap-single-state'() {
+    const app = editor()
+    app.setGrid({ snap: true, snapWorldInches: null })
+    expect(app.doc.canvas.grid.snap).toBe(true)
+    expect(app.doc.canvas.grid.snapWorldInches).toBeNull()
+    app.setSnap(0.5)
+    expect(app.doc.canvas.grid.snap).toBe(true)
+    expect(app.doc.canvas.grid.snapWorldInches).toBe(0.5)
+    app.setSnap(null)
+    expect(app.doc.canvas.grid.snap).toBe(false)
+  },
+  'alt-shortcut-code'() {
+    const app = editor()
+    // macOS reports Option-N as a dead key; the physical key code still opens a new document.
+    app.key('Dead', { alt: true }, undefined, 'KeyN')
+    expect(app.docs).toHaveLength(2)
+    app.key('∑', { alt: true }, undefined, 'KeyW')
+    expect(app.docs).toHaveLength(1)
+  },
+  'workspace-roundtrip'() {
+    const app = editor()
+    app.doc.layers[0].children.push(makeRect(5, 5, 15, 15))
+    app.newDocument('letter')
+    app.renameDocument('Second')
+    app.doc.layers[0].children.push(makeRect(0, 0, 10, 10), makeRect(20, 0, 10, 10))
+    const libraryId = app.createLibrary('Mine')
+    app.selection = [app.doc.layers[0].children[0].id]
+    app.addToLibrary(libraryId, 'Block')
+    app.savePlugin('Dots', 'api.createEllipse(0, 0, 4, 4)')
+    const copy = editor()
+    copy.loadWorkspace(app.serializeWorkspace())
+    expect(copy.docs).toHaveLength(2)
+    expect(copy.active).toBe(1)
+    expect(copy.doc.name).toBe('Second')
+    expect(copy.docs[0].layers[0].children).toHaveLength(1)
+    expect(copy.customLibraries[0].items[0].name).toBe('Block')
+    expect(copy.plugins[0].name).toBe('Dots')
+    // An older single-document autosave still loads.
+    const legacy = editor()
+    legacy.loadWorkspace(app.serialize())
+    expect(legacy.doc.name).toBe('Second')
+    expect(() => editor().loadWorkspace('nope')).toThrow(/not readable/)
+  },
+  'close-confirm'() {
+    const app = editor()
+    app.doc.layers[0].children.push(makeRect(0, 0, 10, 10))
+    expect(app.documentHasContent()).toBe(true)
+    const asked: string[] = []
+    app.confirmClose = (name) => {
+      asked.push(name)
+      return false
+    }
+    app.closeDocument()
+    expect(asked).toEqual(['Untitled'])
+    expect(app.doc.layers[0].children).toHaveLength(1)
+    app.confirmClose = () => true
+    app.closeDocument()
+    expect(app.doc.layers[0].children).toHaveLength(0)
+    // An empty document closes without asking.
+    asked.length = 0
+    app.confirmClose = (name) => {
+      asked.push(name)
+      return false
+    }
+    app.newDocument('letter')
+    app.closeDocument()
+    expect(asked).toEqual([])
+    expect(app.docs).toHaveLength(1)
+  },
 })
 
 // The 2000+ imported symbols load lazily in the app; load them once before the cases run.

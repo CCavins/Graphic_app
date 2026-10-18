@@ -21,7 +21,16 @@ export function Dialog({ title, onClose, children, testId, wide }: { title: stri
   }, [onClose])
   return (
     <div className="scrim" onPointerDown={(event) => event.target === event.currentTarget && onClose()}>
-      <dialog className={wide ? 'dialog wide' : 'dialog'} open data-testid={testId} onKeyDown={(event) => event.stopPropagation()}>
+      <dialog
+        className={wide ? 'dialog wide' : 'dialog'}
+        open
+        data-testid={testId}
+        onKeyDown={(event) => {
+          // Keys typed inside the dialog must not reach the canvas shortcuts, but Escape still closes the dialog.
+          if (event.key === 'Escape') onClose()
+          event.stopPropagation()
+        }}
+      >
         <header className="dialog-head">
           <strong>{title}</strong>
           <button className="icon-button" aria-label="Close" onClick={onClose}>×</button>

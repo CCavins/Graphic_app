@@ -172,13 +172,16 @@ export function OptionsBar() {
         <span>Snap</span>
         <select
           data-testid="snap"
-          value={String(grid.snapWorldInches ?? 'off')}
+          title="Snap drawn points to a real-world step, or to the grid spacing set in Properties"
+          value={!grid.snap ? 'off' : grid.snapWorldInches ? String(grid.snapWorldInches) : 'grid'}
           onChange={(event) => {
             const value = event.target.value
-            editor.setSnap(value === 'off' ? null : Number(value))
+            if (value === 'grid') editor.setGrid({ snap: true, snapWorldInches: null })
+            else editor.setSnap(value === 'off' ? null : Number(value))
           }}
         >
           <option value="off">Off</option>
+          <option value="grid">Grid spacing</option>
           <option value="0.125">1/8 in</option>
           <option value="0.25">1/4 in</option>
           <option value="0.5">1/2 in</option>

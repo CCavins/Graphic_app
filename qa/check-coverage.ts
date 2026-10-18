@@ -5,6 +5,7 @@ const sources = [
   readFileSync(new URL('../src/coverage.test.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../src/perf.test.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../e2e/app.spec.ts', import.meta.url), 'utf8'),
+  readFileSync(new URL('../e2e/layout.spec.ts', import.meta.url), 'utf8'),
 ]
 
 const text = sources.join('\n')

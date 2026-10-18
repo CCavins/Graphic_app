@@ -28,6 +28,8 @@ export function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const textRef = useRef<HTMLTextAreaElement>(null)
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 1023px)').matches)
+  const [phone, setPhone] = useState(() => window.matchMedia('(max-width: 599px)').matches)
+  const [fileMenu, setFileMenu] = useState(false)
   const [open, setOpen] = useState<Record<Pane, boolean>>({ Properties: true, Appearance: true, Layers: false, Libraries: false })
   const [sheet, setSheet] = useState<Pane | null>(null)
   const [dialog, setDialog] = useState<DialogName>(null)
@@ -43,37 +45,45 @@ export function App() {
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1023px)')
-    const update = () => setNarrow(media.matches)
+    const phoneMedia = window.matchMedia('(max-width: 599px)')
+    const update = () => {
+      setNarrow(media.matches)
+      setPhone(phoneMedia.matches)
+    }
     media.addEventListener('change', update)
+    phoneMedia.addEventListener('change', update)
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) return
       if (dialog) return
       const stage = stageRef.current?.getBoundingClientRect()
-      editor.key(event.key, { shift: event.shiftKey, alt: event.altKey, meta: event.metaKey || event.ctrlKey }, stage ? { width: stage.width, height: stage.height } : undefined)
+      editor.key(event.key, { shift: event.shiftKey, alt: event.altKey, meta: event.metaKey || event.ctrlKey }, stage ? { width: stage.width, height: stage.height } : undefined, event.code)
       if (event.key === ' ' || ((event.metaKey || event.ctrlKey) && ['a', 'd', 'g', 'j', '8', '[', ']', 'z'].includes(event.key.toLowerCase()))) event.preventDefault()
+      if (event.altKey && (event.code === 'KeyN' || event.code === 'KeyW')) event.preventDefault()
     }
     const onKeyUp = (event: KeyboardEvent) => editor.keyUp(event.key)
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
     return () => {
       media.removeEventListener('change', update)
+      phoneMedia.removeEventListener('change', update)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
   }, [dialog])
 
   useEffect(() => {
+    editor.confirmClose = (name) => window.confirm(`Close "${name}"? Its drawing will be discarded. Save first if you want to keep it.`)
     void loadAutosave().then((json) => {
       if (!json) return
       try {
-        editor.loadText(json)
+        editor.loadWorkspace(json)
       } catch {
         editor.banner = null
       }
     })
     const timer = window.setInterval(() => {
-      void saveAutosave(editor.serialize())
+      void saveAutosave(editor.serializeWorkspace())
     }, 2000)
     window.__measured = {
       editor,
@@ -218,11 +228,11 @@ export function App() {
         <div className="doc-actions">
           <button data-testid="undo" onClick={() => editor.undo()} title="Undo ⌘Z">Undo</button>
           <button data-testid="redo" onClick={() => editor.redo()} title="Redo ⌘⇧Z">Redo</button>
-          <button data-testid="open-file" onClick={() => fileRef.current?.click()}>Open…</button>
-          <button data-testid="save-file" onClick={() => void saveWithPicker(`${editor.doc.name}.measured`, editor.serialize())}>Save</button>
-          <button data-testid="export-open" onClick={() => setDialog('export')}>Export…</button>
-          <button data-testid="plugins-open" onClick={() => setDialog('plugins')}>Plugins</button>
-          <button data-testid="help-open" onClick={() => setDialog('help')} aria-label="Shortcuts and limits">?</button>
+          {phone ? (
+            <button data-testid="file-menu" aria-haspopup="menu" aria-expanded={fileMenu} onClick={() => setFileMenu((value) => !value)}>Menu ▾</button>
+          ) : (
+            <FileButtons onOpen={() => fileRef.current?.click()} onDialog={setDialog} />
+          )}
           <input
             ref={fileRef}
             data-testid="file-input"
@@ -236,6 +246,11 @@ export function App() {
             }}
           />
         </div>
+        {phone && fileMenu && (
+          <div className="menu doc-menu" data-testid="file-menu-list" role="menu" onClick={() => setFileMenu(false)}>
+            <FileButtons onOpen={() => fileRef.current?.click()} onDialog={setDialog} />
+          </div>
+        )}
       </header>
       <OptionsBar />
       <aside className="toolbar" data-testid="toolbar">
@@ -349,6 +364,19 @@ export function App() {
       {dialog === 'plugins' && <PluginsDialog onClose={closeDialog} />}
       {dialog === 'help' && <HelpDialog onClose={closeDialog} />}
     </div>
+  )
+}
+
+/** Open, Save, Export, Plugins, and Help: inline on wide screens, inside a menu on phones. */
+function FileButtons({ onOpen, onDialog }: { onOpen: () => void; onDialog: (name: DialogName) => void }) {
+  return (
+    <>
+      <button data-testid="open-file" title="Open a .measured, SVG, PDF, PSD, or image file" onClick={onOpen}>Open…</button>
+      <button data-testid="save-file" title="Save this document as a .measured file" onClick={() => void saveWithPicker(`${editor.doc.name}.measured`, editor.serialize())}>Save</button>
+      <button data-testid="export-open" title="Export as SVG, PDF, PNG, JPEG, GIF, TIFF, or PSD" onClick={() => onDialog('export')}>Export…</button>
+      <button data-testid="plugins-open" title="Run or save small scripts that draw for you" onClick={() => onDialog('plugins')}>Plugins</button>
+      <button data-testid="help-open" title="Help: how to use each tool and panel, shortcuts" aria-label="Help" onClick={() => onDialog('help')}>?</button>
+    </>
   )
 }
 

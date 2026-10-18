@@ -312,6 +312,16 @@ export interface MeasuredFile {
   document: Doc
 }
 
+/** Everything the app restores on reload: every open tab, which one is active, custom libraries, and plugins. */
+export interface WorkspaceFile {
+  version: 1
+  workspace: true
+  docs: Doc[]
+  active: number
+  customLibraries: unknown[]
+  plugins: { id: string; name: string; code: string }[]
+}
+
 export interface Pt {
   x: number
   y: number
