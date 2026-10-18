@@ -1929,6 +1929,16 @@ Object.assign(cases, {
     manual.setBaseUnit('cm')
     expect(manual.doc.canvas.labelUnit).toBe('yd')
   },
+  'mask-feedback'() {
+    const app = editor()
+    const node = makeRect(0, 0, 10, 10)
+    app.doc.layers[0].children.push(node)
+    app.selection = [node.id]
+    const history = app.historySize()
+    app.clipSelection()
+    expect(app.banner).toMatch(/Select the shape to mask/)
+    expect(app.historySize()).toBe(history)
+  },
   'field-validation'() {
     // Validators explain refusals in plain words instead of silently clamping.
     const sides = numberIn({ min: 3, max: 100, integer: true, label: 'Sides' })

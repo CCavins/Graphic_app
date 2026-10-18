@@ -3387,7 +3387,11 @@ export class Editor {
 
   clipSelection(): void {
     const nodes = selectedNodes(this.doc, this.selection)
-    if (nodes.length < 2) return
+    if (nodes.length < 2) {
+      this.banner = 'Select the shape to mask with and at least one shape behind it, then choose Mask.'
+      this.emit()
+      return
+    }
     this.snapshot()
     const clip = nodes[0]
     const group = makePath('Clip', 0, 0, clip.commands)

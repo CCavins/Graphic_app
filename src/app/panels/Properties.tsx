@@ -173,6 +173,7 @@ export function PropertiesPanel() {
         {node && !labels.length && <p className="hint">Select an object and add a label. Width sits above, height on the left, size on top.</p>}
       </Section>
       <Section title="Align" testId="section-align" defaultOpen={false}>
+        {editor.selection.length < 2 && <p className="hint" data-testid="align-hint">Select two or more objects to align them; three or more to distribute.</p>}
         <div className="org-bar" role="group" aria-label="Align">
           {([
             ['left', 'align-left', 'Align left'],
@@ -182,18 +183,18 @@ export function PropertiesPanel() {
             ['middle', 'align-middle', 'Align middle'],
             ['bottom', 'align-bottom', 'Align bottom'],
           ] as const).map(([mode, icon, label]) => (
-            <button key={mode} className="org" data-testid={`align-${mode}`} title={label} aria-label={label} onClick={() => editor.align(mode)}>
+            <button key={mode} className="org" data-testid={`align-${mode}`} disabled={editor.selection.length < 2} title={editor.selection.length < 2 ? `${label}: select two or more objects first` : label} aria-label={label} onClick={() => editor.align(mode)}>
               <OrgIcon name={icon} />
             </button>
           ))}
         </div>
         <div className="org-bar" role="group" aria-label="Distribute, flip, and group">
-          <button className="org" data-testid="distribute" title="Distribute horizontally" aria-label="Distribute horizontally" onClick={() => editor.distribute('h')}><OrgIcon name="distribute-h" /></button>
-          <button className="org" title="Distribute vertically" aria-label="Distribute vertically" onClick={() => editor.distribute('v')}><OrgIcon name="distribute-v" /></button>
-          <button className="org" data-testid="flip" title="Flip horizontal" aria-label="Flip horizontal" onClick={() => editor.flip('h')}><OrgIcon name="flip-h" /></button>
-          <button className="org" title="Flip vertical" aria-label="Flip vertical" onClick={() => editor.flip('v')}><OrgIcon name="flip-v" /></button>
-          <button className="org" title="Group" aria-label="Group" onClick={() => editor.group()}><OrgIcon name="group" /></button>
-          <button className="org" title="Ungroup" aria-label="Ungroup" onClick={() => editor.ungroup()}><OrgIcon name="ungroup" /></button>
+          <button className="org" data-testid="distribute" disabled={editor.selection.length < 3} title={editor.selection.length < 3 ? 'Distribute horizontally: select three or more objects first' : 'Distribute horizontally'} aria-label="Distribute horizontally" onClick={() => editor.distribute('h')}><OrgIcon name="distribute-h" /></button>
+          <button className="org" disabled={editor.selection.length < 3} title={editor.selection.length < 3 ? 'Distribute vertically: select three or more objects first' : 'Distribute vertically'} aria-label="Distribute vertically" onClick={() => editor.distribute('v')}><OrgIcon name="distribute-v" /></button>
+          <button className="org" data-testid="flip" disabled={!editor.selection.length} title="Flip horizontal" aria-label="Flip horizontal" onClick={() => editor.flip('h')}><OrgIcon name="flip-h" /></button>
+          <button className="org" disabled={!editor.selection.length} title="Flip vertical" aria-label="Flip vertical" onClick={() => editor.flip('v')}><OrgIcon name="flip-v" /></button>
+          <button className="org" disabled={editor.selection.length < 2} title={editor.selection.length < 2 ? 'Group: select two or more objects first' : 'Group (⌘G)'} aria-label="Group" onClick={() => editor.group()}><OrgIcon name="group" /></button>
+          <button className="org" disabled={editor.one()?.kind !== 'group'} title={editor.one()?.kind !== 'group' ? 'Ungroup: select a group first' : 'Ungroup (⌘⇧G)'} aria-label="Ungroup" onClick={() => editor.ungroup()}><OrgIcon name="ungroup" /></button>
         </div>
         <div className="org-bar" role="group" aria-label="Order">
           {([
@@ -202,7 +203,7 @@ export function PropertiesPanel() {
             ['backward', 'Send backward'],
             ['back', 'Send to back'],
           ] as const).map(([direction, label]) => (
-            <button key={direction} className="org" title={label} aria-label={label} onClick={() => editor.arrange(direction)}>
+            <button key={direction} className="org" disabled={!editor.selection.length} title={label} aria-label={label} onClick={() => editor.arrange(direction)}>
               <OrgIcon name={direction} />
             </button>
           ))}

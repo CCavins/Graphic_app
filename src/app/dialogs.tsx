@@ -9,7 +9,7 @@ import type { BaseUnit, CanvasStyle } from '../model/types'
 import { canvasRenderer } from '../render/draw'
 import { download } from '../storage/files'
 import { editor } from './instance'
-import { Field, Row, Slider } from './ui'
+import { Field, parseFraction, plainNumber, Row, Slider } from './ui'
 
 export function Dialog({ title, onClose, children, testId, wide }: { title: string; onClose: () => void; children: ReactNode; testId?: string; wide?: boolean }) {
   useEffect(() => {
@@ -79,10 +79,10 @@ export function NewDocumentDialog({ onClose }: { onClose: () => void }) {
         </select>
       </label>
       <Row>
-        <Field label="Width" testId="new-width" width={64} value={show(options.width)} onCommit={(raw) => patch({ preset: 'custom', width: Math.max(1, Number(raw) || 1) * per })} />
-        <Field label="Height" testId="new-height" width={64} value={show(options.height)} onCommit={(raw) => patch({ preset: 'custom', height: Math.max(1, Number(raw) || 1) * per })} />
-        <label className="field">
-          <span>Units</span>
+        <Field label="Width" testId="new-width" width={78} suffix={options.baseUnit} title="Page width, in the unit chosen beside it" value={show(options.width)} validate={plainNumber('Width', { min: 0.01 })} onCommit={(raw) => patch({ preset: 'custom', width: parseFraction(raw)! * per, orientation: parseFraction(raw)! * per >= options.height ? 'landscape' : 'portrait' })} />
+        <Field label="Height" testId="new-height" width={78} suffix={options.baseUnit} title="Page height, in the unit chosen beside it" value={show(options.height)} validate={plainNumber('Height', { min: 0.01 })} onCommit={(raw) => patch({ preset: 'custom', height: parseFraction(raw)! * per, orientation: options.width >= parseFraction(raw)! * per ? 'landscape' : 'portrait' })} />
+        <label className="field" title="Unit for the page size and rulers; the numbers are converted">
+          <span>Unit</span>
           <select data-testid="new-unit" value={options.baseUnit} onChange={(event) => patch({ baseUnit: event.target.value as BaseUnit })}>
             {(['px', 'in', 'cm', 'mm'] as BaseUnit[]).map((unit) => <option key={unit}>{unit}</option>)}
           </select>
@@ -90,8 +90,8 @@ export function NewDocumentDialog({ onClose }: { onClose: () => void }) {
       </Row>
       <Row>
         <div className="segmented" role="group" aria-label="Orientation">
-          <button data-testid="new-portrait" data-active={options.orientation === 'portrait'} onClick={() => patch({ orientation: 'portrait' })}>Portrait</button>
-          <button data-testid="new-landscape" data-active={options.orientation === 'landscape'} onClick={() => patch({ orientation: 'landscape' })}>Landscape</button>
+          <button data-testid="new-portrait" data-active={options.orientation === 'portrait'} title="Taller than wide; swaps the width and height above" onClick={() => patch({ orientation: 'portrait', width: Math.min(options.width, options.height), height: Math.max(options.width, options.height) })}>Portrait</button>
+          <button data-testid="new-landscape" data-active={options.orientation === 'landscape'} title="Wider than tall; swaps the width and height above" onClick={() => patch({ orientation: 'landscape', width: Math.max(options.width, options.height), height: Math.min(options.width, options.height) })}>Landscape</button>
         </div>
         <div className="segmented" role="group" aria-label="Color mode">
           <button data-active={options.colorMode === 'rgb'} onClick={() => patch({ colorMode: 'rgb' })}>RGB</button>

@@ -46,6 +46,18 @@ export function App() {
   }
 
   useEffect(() => editor.subscribe(() => setTick((value) => value + 1)), [])
+  // Banners explain one action; they leave on their own so a stale message is not read as a current problem.
+  const banner = editor.banner
+  useEffect(() => {
+    if (!banner) return
+    const timer = window.setTimeout(() => {
+      if (editor.banner === banner) {
+        editor.banner = null
+        editor.emit()
+      }
+    }, 6000)
+    return () => window.clearTimeout(timer)
+  }, [banner])
 
   useEffect(() => {
     const field = textRef.current
