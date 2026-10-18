@@ -1943,7 +1943,7 @@ Object.assign(cases, {
     expect(width('1/4')).toBeNull()
     expect(width('30 cm')).toMatch(/unit is set by the menu/)
     expect(width('0')).toMatch(/at least/)
-    expect(width('x')).toMatch(/number like/)
+    expect(width('..')).toMatch(/number like/)
     expect(parseFraction('1/4')).toBe(0.25)
     expect(parseFraction('1 1/2')).toBe(1.5)
     expect(parseFraction('-2.5')).toBe(-2.5)
