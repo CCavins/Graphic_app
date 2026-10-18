@@ -1,5 +1,6 @@
 import { dashPresetOf, type ArcMode, type DashPreset, type LineMode } from '../editor/editor'
 import { editor } from './instance'
+import { unitSystem } from '../model/scale'
 import { TOOL_NAMES } from './toolInfo'
 import { Field, numberIn } from './ui'
 
@@ -156,12 +157,12 @@ export function OptionsBar() {
         >
           <option value="off">Off</option>
           <option value="grid">Grid spacing</option>
-          <option value="0.125">1/8 in</option>
-          <option value="0.25">1/4 in</option>
-          <option value="0.5">1/2 in</option>
-          <option value="1">1 in</option>
-          <option value="6">6 in</option>
-          <option value="12">1 ft</option>
+          {snapSteps(editor.doc.canvas.baseUnit).map((step) => (
+            <option key={step.inches} value={String(step.inches)}>{step.label}</option>
+          ))}
+          {grid.snap && grid.snapWorldInches && !snapSteps(editor.doc.canvas.baseUnit).some((step) => step.inches === grid.snapWorldInches) && (
+            <option value={String(grid.snapWorldInches)}>{grid.snapWorldInches} in</option>
+          )}
         </select>
       </label>
       <label className="field">
@@ -186,4 +187,30 @@ export function OptionsBar() {
       </label>
     </div>
   )
+}
+
+/** Real-world snap steps in the unit system of the page: inches and feet, millimetres and metres, or pixels. */
+export function snapSteps(unit: 'px' | 'in' | 'cm' | 'mm'): { inches: number; label: string }[] {
+  const system = unitSystem(unit)
+  if (system === 'metric') {
+    return [
+      { inches: 1 / 25.4, label: '1 mm' },
+      { inches: 5 / 25.4, label: '5 mm' },
+      { inches: 10 / 25.4, label: '1 cm' },
+      { inches: 50 / 25.4, label: '5 cm' },
+      { inches: 100 / 25.4, label: '10 cm' },
+      { inches: 1000 / 25.4, label: '1 m' },
+    ]
+  }
+  if (system === 'px') {
+    return [1, 5, 10, 25, 50, 100].map((px) => ({ inches: px / 72, label: `${px} px` }))
+  }
+  return [
+    { inches: 0.125, label: '1/8 in' },
+    { inches: 0.25, label: '1/4 in' },
+    { inches: 0.5, label: '1/2 in' },
+    { inches: 1, label: '1 in' },
+    { inches: 6, label: '6 in' },
+    { inches: 12, label: '1 ft' },
+  ]
 }

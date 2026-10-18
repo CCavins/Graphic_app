@@ -275,10 +275,10 @@ function ResizeRow() {
           <button key={side} data-testid={`resize-${side}`} title={`Add ${amount} ${unit} to the ${side} edge`} onClick={() => add(side)}>{side[0].toUpperCase() + side.slice(1)}</button>
         ))}
       </Row>
+      <p className="hint" style={{ margin: '6px 0 2px' }}>Fit the page to the drawing</p>
       <Row wrap>
-        <span className="hint">Fit the page to the drawing:</span>
-        <button data-testid="resize-artwork" title="Make the page twice the size of the drawing, centred on it" onClick={() => editor.resizeArtwork(2, true)}>Artwork ×2</button>
-        <button title="Make the page half the size of the drawing, centred on it" onClick={() => editor.resizeArtwork(0.5, true)}>Artwork ×½</button>
+        <button data-testid="resize-artwork" title="Make the page twice the size of the drawing, centred on it" onClick={() => editor.resizeArtwork(2, true)}>Twice the drawing</button>
+        <button title="Make the page half the size of the drawing, centred on it" onClick={() => editor.resizeArtwork(0.5, true)}>Half the drawing</button>
       </Row>
     </div>
   )

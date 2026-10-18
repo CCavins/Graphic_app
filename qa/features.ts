@@ -168,6 +168,7 @@ export const features: FeatureRow[] = [
   { id: 'base-unit-rescale' },
   { id: 'field-validation' },
   { id: 'mask-feedback' },
+  { id: 'snap-steps-follow-unit' },
   { id: 'edit-tool-empty-hint' },
   { id: 'text-create-one-undo' },
   { id: 'align-disabled' },

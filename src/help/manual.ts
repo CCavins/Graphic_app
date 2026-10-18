@@ -151,7 +151,7 @@ const properties: HelpTopic[] = [
       '- Scale: pick a common scale, or type Paper and Real amounts and choose each unit from its menu (see Drawing to scale).',
       '- Rulers, Smart guides, and Pixel-align toggle those helpers.',
       '- View switches Vector / Outline / Pixels. Background and Selection set the canvas color and the selection highlight color.',
-      '- Grow page by adds the chosen amount to the edge you click. Artwork ×2 and Artwork ×½ resize the page around the drawing.',
+      '- Grow page by adds the chosen amount to the edge you click. "Twice the drawing" and "Half the drawing" resize the page around what you have drawn.',
     ],
     keywords: 'page size orientation landscape portrait units cmyk rgb rulers background',
   },

@@ -21,6 +21,7 @@ import { PRESETS } from './model/factory'
 import { SHORTCUTS, TOOL_KEYS } from './input/shortcuts'
 import { TOOL_INFO, TOOL_NAMES, TOOLS } from './app/toolInfo'
 import { numberIn, parseFraction, plainNumber } from './app/ui'
+import { snapSteps } from './app/OptionsBar'
 import { bodyHtml, renderDocsPage } from './help/docs'
 import { formatScale, formatScaleAmount, matchingPreset, parseScaleAmount, realUnitsFor, restateScale, scalePresets, scaleRatio } from './model/scale'
 import { scaleFromStatement } from './model/units'
@@ -1865,6 +1866,8 @@ Object.assign(cases, {
     // The same ratio reads naturally in each unit system.
     expect(formatScale(restateScale(48, 'in'))).toBe('1/4 in = 1 ft')
     expect(formatScale(restateScale(96, 'in'))).toBe('1/8 in = 1 ft')
+    expect(formatScale(restateScale(50, 'in'))).toBe('1 in = 50 in')
+    expect(formatScale(restateScale(240, 'in'))).toBe('1 in = 20 ft')
     expect(formatScale(restateScale(12, 'in'))).toBe('1 in = 1 ft')
     expect(formatScale(restateScale(120, 'in'))).toBe('1 in = 10 ft')
     expect(formatScale(restateScale(2, 'in'))).toBe('1 in = 2 in')
@@ -1950,6 +1953,12 @@ Object.assign(cases, {
       app.pointerUp(pointer(400, 400))
       expect(app.banner, tool).toMatch(/shape/)
     }
+  },
+  'snap-steps-follow-unit'() {
+    expect(snapSteps('in').map((step) => step.label)).toContain('1 ft')
+    expect(snapSteps('mm').map((step) => step.label)).toEqual(['1 mm', '5 mm', '1 cm', '5 cm', '10 cm', '1 m'])
+    expect(snapSteps('cm')[2].inches).toBeCloseTo(10 / 25.4)
+    expect(snapSteps('px').map((step) => step.label)).toContain('10 px')
   },
   'mask-feedback'() {
     const app = editor()

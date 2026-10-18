@@ -71,7 +71,8 @@ export function restateScale(ratio: number, unit: BaseUnit): ScaleStatement {
       // Architect's scales: a nice fraction of an inch to the foot.
       const inchesPerFoot = 12 / ratio
       if (NICE_FRACTIONS.some((f) => close(inchesPerFoot, f))) return { paperAmount: round(inchesPerFoot), paperUnit: 'in', realAmount: 1, realUnit: 'ft' }
-      if (ratio >= 12) return { paperAmount: 1, paperUnit: 'in', realAmount: round(ratio / 12), realUnit: 'ft' }
+      // Use feet only when they come out whole; "1 in = 50 in" reads better than "1 in = 4.16667 ft".
+      if (ratio >= 12 && close(ratio / 12, Math.round(ratio / 12))) return { paperAmount: 1, paperUnit: 'in', realAmount: round(ratio / 12), realUnit: 'ft' }
       return { paperAmount: 1, paperUnit: 'in', realAmount: round(ratio), realUnit: 'in' }
     }
     case 'metric': {
