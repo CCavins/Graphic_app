@@ -114,11 +114,11 @@ import {
   worldInchesToPaperPoints,
 } from '../model/units'
 import { exportPdf, exportPsd, exportSvg, exportTiff, importPsd, looksLikePsd, outsideCanvas, sliceNodes, type ExportOptions } from '../model/export'
+import { TOOL_KEYS } from '../input/shortcuts'
 
 export type Tool =
   | 'select'
   | 'pathSelect'
-  | 'convert'
   | 'pen'
   | 'pencil'
   | 'brush'
@@ -136,11 +136,6 @@ export type Tool =
   | 'gradient'
   | 'hand'
   | 'zoom'
-  | 'scale'
-  | 'rotate'
-  | 'slant'
-  | 'pattern'
-  | 'image'
 
 export type DashPreset = 'solid' | 'dotted' | 'dashed'
 export type LineMode = 'plain' | 'arrow' | 'dimension'
@@ -3213,25 +3208,7 @@ export class Editor {
     if (lower === 'arrowup') this.nudge(0, -nudge)
     if (lower === 'arrowdown') this.nudge(0, nudge)
     if (lower === ' ') this.spaceDown = true
-    const tools: Record<string, Tool> = {
-      v: 'select',
-      a: 'pathSelect',
-      p: 'pen',
-      n: 'pencil',
-      b: 'brush',
-      l: 'line',
-      r: 'rect',
-      o: 'ellipse',
-      t: 'text',
-      e: 'eraser',
-      c: 'scissors',
-      g: 'gradient',
-      h: 'hand',
-      z: 'zoom',
-      '+': 'addAnchor',
-      '=': 'addAnchor',
-    }
-    if (!mods.meta && !mods.alt && tools[lower]) this.setTool(tools[lower])
+    if (!mods.meta && !mods.alt && TOOL_KEYS[lower]) this.setTool(TOOL_KEYS[lower])
     this.emit()
   }
 

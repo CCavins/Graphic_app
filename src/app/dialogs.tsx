@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { LIMITATIONS } from '../editor/editor'
 import { SHORTCUTS } from '../input/shortcuts'
+import { TOOL_INFO, TOOLS } from './toolInfo'
 import type { AdjustMethod } from '../model/color'
 import { exportPsd, exportTiff } from '../model/export'
 import { PRESETS, type NewDocumentOptions } from '../model/factory'
@@ -314,25 +315,17 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
     <Dialog title="Shortcuts and browser limits" onClose={onClose} testId="help-dialog" wide>
       <div className="two-col">
         <div data-testid="shortcuts">
+          <h4>Tools</h4>
+          {TOOLS.map((tool) => (
+            <div key={tool} className="shortcut">
+              <kbd>{TOOL_INFO[tool].shortcut ?? '–'}</kbd> {TOOL_INFO[tool].name}
+            </div>
+          ))}
           <h4>Shortcuts</h4>
           {SHORTCUTS.map((item) => (
             <div key={item.keys} className="shortcut" data-reserved={item.reserved}>
               <kbd>{item.keys}</kbd> {item.action}
             </div>
-          ))}
-          {[
-            ['⌘A', 'Select all'],
-            ['⌘C / ⌘X / ⌘V', 'Copy, cut, paste'],
-            ['⌘⇧V', 'Paste in place'],
-            ['⌘D', 'Smart duplicate'],
-            ['⌘G / ⌘⇧G', 'Group, ungroup'],
-            ['⌘] / ⌘[', 'Bring forward, send backward'],
-            ['⌘J', 'Connect endpoints'],
-            ['⌘8', 'Compound path'],
-            ['E / C / + / G', 'Eraser, scissors, add anchor, gradient'],
-            ['Arrows', 'Nudge (Shift ×10)'],
-          ].map(([keys, action]) => (
-            <div key={keys} className="shortcut"><kbd>{keys}</kbd> {action}</div>
           ))}
         </div>
         <div data-testid="limitations">

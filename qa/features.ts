@@ -147,6 +147,8 @@ export const features: FeatureRow[] = [
   { id: 'pen-switch-commits' },
   { id: 'snap-single-state' },
   { id: 'alt-shortcut-code' },
+  { id: 'tool-info-complete' },
+  { id: 'tool-tooltips' },
   { id: 'workspace-roundtrip' },
   { id: 'workspace-autosave' },
   { id: 'close-confirm' },

@@ -1,34 +1,7 @@
-import { dashPresetOf, type ArcMode, type DashPreset, type LineMode, type Tool } from '../editor/editor'
+import { dashPresetOf, type ArcMode, type DashPreset, type LineMode } from '../editor/editor'
 import { editor } from './instance'
+import { TOOL_NAMES } from './toolInfo'
 import { Field } from './ui'
-
-export const TOOL_NAMES: Record<Tool, string> = {
-  select: 'Move',
-  pathSelect: 'Path',
-  convert: 'Convert',
-  pen: 'Pen',
-  pencil: 'Pencil',
-  brush: 'Brush',
-  line: 'Line',
-  arc: 'Arc',
-  rect: 'Rect',
-  roundRect: 'Round',
-  ellipse: 'Ellipse',
-  polygon: 'Polygon',
-  star: 'Star',
-  text: 'Text',
-  eraser: 'Eraser',
-  scissors: 'Scissors',
-  addAnchor: 'Add anchor',
-  gradient: 'Gradient',
-  hand: 'Hand',
-  zoom: 'Zoom',
-  scale: 'Scale',
-  rotate: 'Rotate',
-  slant: 'Slant',
-  pattern: 'Pattern',
-  image: 'Image',
-}
 
 const FONTS = ['Georgia, serif', 'Helvetica Neue, Helvetica, Arial, sans-serif', 'Avenir Next, Segoe UI, sans-serif', 'Times New Roman, serif', 'Courier New, monospace', 'Futura, Trebuchet MS, sans-serif']
 

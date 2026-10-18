@@ -12,14 +12,28 @@ async function drawRect(page: Page) {
   await page.mouse.up()
 }
 
-test('toolbar icons show names on hover', async ({ page }) => {
+test('toolbar icons show name, key, and hint on hover (tool-tooltips)', async ({ page }) => {
   await page.goto('./')
   const pen = page.getByTestId('tool-pen')
-  await expect(pen).toHaveAttribute('aria-label', 'Pen')
-  await expect(pen.locator('.tip')).toHaveCSS('opacity', '0')
+  await expect(pen).toHaveAttribute('aria-label', 'Pen (P)')
+  await expect(page.getByTestId('tool-tip')).toHaveCount(0)
   await pen.hover()
-  await expect(pen.locator('.tip')).toHaveCSS('opacity', '1')
-  await expect(pen.locator('.tip')).toHaveText('Pen')
+  const tip = page.getByTestId('tool-tip')
+  await expect(tip).toBeVisible()
+  await expect(tip).toContainText('Pen')
+  await expect(tip.locator('kbd')).toHaveText('P')
+  await expect(tip).toContainText('Click to add corner points')
+  // The tip is positioned beside the toolbar, not clipped by it.
+  const [tipBox, barBox] = await Promise.all([tip.boundingBox(), page.getByTestId('toolbar').boundingBox()])
+  expect(tipBox!.x).toBeGreaterThanOrEqual(barBox!.x + barBox!.width - 1)
+  await page.getByTestId('tool-star').hover()
+  await expect(tip).toContainText('Star')
+  await expect(tip.locator('kbd')).toHaveText('S')
+  await page.getByTestId('canvas').hover()
+  await expect(page.getByTestId('tool-tip')).toHaveCount(0)
+  // Keyboard users get the same tip on focus.
+  await pen.focus()
+  await expect(page.getByTestId('tool-tip')).toContainText('Pen')
 })
 
 test('snap is optional and corners follow the cursor', async ({ page }) => {
@@ -54,7 +68,7 @@ test('snap is optional and corners follow the cursor', async ({ page }) => {
   expect(Math.abs(placed.x - paperStartX)).toBeLessThan(1.5)
   expect(Math.abs(placed.y - paperStartY)).toBeLessThan(1.5)
   await page.getByTestId('snap').selectOption('1')
-  await expect(page.getByTestId('active-tool')).toHaveText('Rect')
+  await expect(page.getByTestId('active-tool')).toHaveText('Rectangle')
 })
 
 test('text tool edits an existing text box', async ({ page }) => {
@@ -134,7 +148,7 @@ test('shell matches the Graphic layout', async ({ page }) => {
   await expect(page.getByTestId('doc-tabs')).toBeVisible()
   await expect(page.getByTestId('doc-tab').first()).toContainText(/Untitled/)
   await expect(page.getByTestId('options-bar')).toBeVisible()
-  await expect(page.getByTestId('active-tool')).toHaveText('Move')
+  await expect(page.getByTestId('active-tool')).toHaveText('Select')
   const toolbar = await page.getByTestId('toolbar').boundingBox()
   const inspector = await page.getByTestId('inspector').boundingBox()
   const canvas = await page.getByTestId('canvas').boundingBox()

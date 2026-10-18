@@ -8,15 +8,15 @@ import { loadAutosave, saveAutosave, saveWithPicker } from '../storage/files'
 import { ExportDialog, HelpDialog, NewDocumentDialog, PluginsDialog, RecolorDialog, SelectSimilarDialog } from './dialogs'
 import { OrgIcon, ToolIcon } from './icons'
 import { editor } from './instance'
-import { OptionsBar, TOOL_NAMES } from './OptionsBar'
+import { OptionsBar } from './OptionsBar'
 import { AppearancePanel } from './panels/Appearance'
 import { LayersPanel } from './panels/Layers'
 import { LibrariesPanel } from './panels/Libraries'
 import { PropertiesPanel } from './panels/Properties'
+import { TOOL_INFO, TOOLS } from './toolInfo'
 import { ColorWell } from './ui'
 import './styles.css'
 
-const TOOLS: Tool[] = ['select', 'pathSelect', 'pen', 'pencil', 'brush', 'line', 'arc', 'rect', 'roundRect', 'ellipse', 'polygon', 'star', 'text', 'eraser', 'scissors', 'addAnchor', 'gradient', 'hand', 'zoom']
 const PANES = ['Properties', 'Appearance', 'Layers', 'Libraries'] as const
 type Pane = (typeof PANES)[number]
 type DialogName = 'new' | 'export' | 'recolor' | 'similar' | 'plugins' | 'help' | null
@@ -254,15 +254,7 @@ export function App() {
       </header>
       <OptionsBar />
       <aside className="toolbar" data-testid="toolbar">
-        <span className="tool-name" aria-hidden="true">{TOOL_NAMES[editor.tool]}</span>
-        <div className="tools">
-          {TOOLS.map((tool) => (
-            <button key={tool} className="tool" data-testid={`tool-${tool}`} data-active={editor.tool === tool} aria-label={TOOL_NAMES[tool]} onClick={() => editor.setTool(tool)}>
-              <ToolIcon name={tool} />
-              <span className="tip" aria-hidden="true">{TOOL_NAMES[tool]}</span>
-            </button>
-          ))}
-        </div>
+        <Toolbar active={editor.tool} bottom={narrow} onPick={(tool) => editor.setTool(tool)} />
         <div className="wells" data-testid="color-wells">
           <ColorWell testId="well-fill" label="Fill" color={fillColor} size={26} cmyk={editor.doc.canvas.colorMode === 'cmyk'} onChange={(color) => editor.setFill({ color, enabled: true })} />
           <ColorWell testId="well-stroke" label="Stroke" color={strokeColor} size={26} cmyk={editor.doc.canvas.colorMode === 'cmyk'} onChange={(color) => editor.setStroke({ color, enabled: true })} />
@@ -368,6 +360,75 @@ export function App() {
 }
 
 /** Open, Save, Export, Plugins, and Help: inline on wide screens, inside a menu on phones. */
+/** Tool buttons with a tooltip that names the tool, shows its key, and says what a drag does. Hover, focus, or long-press shows it. */
+function Toolbar({ active, bottom, onPick }: { active: Tool; bottom: boolean; onPick: (tool: Tool) => void }) {
+  const [tip, setTip] = useState<{ tool: Tool; x: number; y: number } | null>(null)
+  const press = useRef<number | null>(null)
+  const show = (tool: Tool, button: HTMLElement) => {
+    const r = button.getBoundingClientRect()
+    setTip(bottom ? { tool, x: r.left + r.width / 2, y: r.top } : { tool, x: r.right, y: r.top + r.height / 2 })
+  }
+  const hide = () => {
+    if (press.current) window.clearTimeout(press.current)
+    press.current = null
+    setTip(null)
+  }
+  const info = tip ? TOOL_INFO[tip.tool] : null
+  return (
+    <>
+      <div className="tools">
+        {TOOLS.map((tool) => {
+          const entry = TOOL_INFO[tool]
+          const label = entry.shortcut ? `${entry.name} (${entry.shortcut})` : entry.name
+          return (
+            <button
+              key={tool}
+              className="tool"
+              data-testid={`tool-${tool}`}
+              data-active={active === tool}
+              aria-label={label}
+              title={`${label}\n${entry.hint}`}
+              onClick={() => onPick(tool)}
+              onPointerEnter={(event) => {
+                if (event.pointerType === 'mouse') show(tool, event.currentTarget)
+              }}
+              onPointerLeave={hide}
+              onPointerDown={(event) => {
+                if (event.pointerType === 'mouse') return
+                const button = event.currentTarget
+                if (press.current) window.clearTimeout(press.current)
+                press.current = window.setTimeout(() => {
+                  show(tool, button)
+                  press.current = window.setTimeout(hide, 2500)
+                }, 450)
+              }}
+              onPointerUp={() => {
+                if (press.current && !tip) {
+                  window.clearTimeout(press.current)
+                  press.current = null
+                }
+              }}
+              onFocus={(event) => show(tool, event.currentTarget)}
+              onBlur={hide}
+            >
+              <ToolIcon name={tool} />
+            </button>
+          )
+        })}
+      </div>
+      {tip && info && (
+        <div className="tool-tip" data-testid="tool-tip" role="tooltip" data-bottom={bottom} style={{ left: tip.x, top: tip.y }}>
+          <div className="tool-tip-head">
+            <b>{info.name}</b>
+            {info.shortcut && <kbd>{info.shortcut}</kbd>}
+          </div>
+          <div className="tool-tip-hint">{info.hint}</div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function FileButtons({ onOpen, onDialog }: { onOpen: () => void; onDialog: (name: DialogName) => void }) {
   return (
     <>

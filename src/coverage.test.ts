@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { CATALOG, LIBRARIES, loadCatalog, searchCatalog } from './catalog/catalog'
-import { Editor } from './editor/editor'
+import { Editor, type Tool } from './editor/editor'
 import { exportSvg, importPsd, looksLikePsd } from './model/export'
 import { cmd, commandsBounds, localBounds, paperBounds } from './model/geometry'
 import { splitShade } from './model/shading'
@@ -18,7 +18,8 @@ import { labelAnchor, makeLabel, nodeLabels, placedLabels } from './model/labels
 import { anchors } from './model/transform'
 import { fromHex, hsbToRgb, rgb, rgbToCmyk, rgbToHsb, toHex } from './model/color'
 import { PRESETS } from './model/factory'
-import { SHORTCUTS } from './input/shortcuts'
+import { SHORTCUTS, TOOL_KEYS } from './input/shortcuts'
+import { TOOL_INFO, TOOL_NAMES, TOOLS } from './app/toolInfo'
 
 const pointer = (cx: number, cy: number, extra: Record<string, unknown> = {}) => ({
   cx,
@@ -1469,7 +1470,7 @@ Object.assign(cases, {
   },
   'shortcuts-tools'() {
     const app = editor()
-    for (const [key, tool] of Object.entries({ e: 'eraser', c: 'scissors', g: 'gradient', '+': 'addAnchor', v: 'select', a: 'pathSelect' })) {
+    for (const [key, tool] of Object.entries({ e: 'eraser', c: 'scissors', g: 'gradient', '+': 'addAnchor', v: 'select', a: 'pathSelect', d: 'roundRect', y: 'polygon', s: 'star', u: 'arc' })) {
       app.key(key, {})
       expect(app.tool).toBe(tool)
     }
@@ -1768,6 +1769,31 @@ Object.assign(cases, {
     app.closeDocument()
     expect(asked).toEqual([])
     expect(app.docs).toHaveLength(1)
+  },
+  'tool-info-complete'() {
+    // Every toolbar tool has a name, a hint, a manual paragraph, and a single unique key.
+    const keys = new Map<string, Tool>()
+    for (const tool of TOOLS) {
+      const info = TOOL_INFO[tool]
+      expect(info.name.length, tool).toBeGreaterThan(2)
+      expect(info.hint.length, tool).toBeGreaterThan(20)
+      expect(info.how.length, tool).toBeGreaterThan(40)
+      expect(info.shortcut, tool).toBeTruthy()
+      expect(keys.has(info.shortcut!), `${tool} shares ${info.shortcut} with ${keys.get(info.shortcut!)}`).toBe(false)
+      keys.set(info.shortcut!, tool)
+      // The key really selects the tool.
+      const app = editor()
+      app.key(info.shortcut!.toLowerCase(), {})
+      expect(app.tool, tool).toBe(tool)
+      expect(TOOL_NAMES[tool]).toBe(info.name)
+    }
+    // Every key in the map points at a toolbar tool.
+    for (const tool of Object.values(TOOL_KEYS)) expect(TOOLS).toContain(tool)
+    // Names are full words, not abbreviations.
+    expect(TOOL_INFO.rect.name).toBe('Rectangle')
+    expect(TOOL_INFO.roundRect.name).toBe('Rounded rectangle')
+    expect(TOOL_INFO.select.name).toBe('Select')
+    expect(TOOL_INFO.pathSelect.name).toBe('Direct select')
   },
 })
 
