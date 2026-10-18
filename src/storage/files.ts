@@ -45,14 +45,21 @@ export function download(filename: string, data: Blob | string, type = 'applicat
   URL.revokeObjectURL(url)
 }
 
-export async function saveWithPicker(filename: string, contents: string): Promise<void> {
+/** Saves through the browser's file picker when it has one; otherwise the file lands in Downloads. Says which. */
+export async function saveWithPicker(filename: string, contents: string): Promise<'picker' | 'download' | 'cancelled'> {
   const picker = (window as Window & { showSaveFilePicker?: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker
   if (!picker) {
     download(filename, contents)
-    return
+    return 'download'
   }
-  const handle = await picker({ suggestedName: filename })
-  const writable = await handle.createWritable()
-  await writable.write(contents)
-  await writable.close()
+  try {
+    const handle = await picker({ suggestedName: filename })
+    const writable = await handle.createWritable()
+    await writable.write(contents)
+    await writable.close()
+    return 'picker'
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled'
+    throw error
+  }
 }

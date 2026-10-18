@@ -201,3 +201,16 @@ test('export downloads PNG and PDF files (export-png-pdf)', async ({ page }) => 
     await page.keyboard.press('Escape')
   }
 })
+
+test('save says where the file went when the browser has no save dialog (save-feedback)', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true })
+  })
+  await page.goto('./')
+  const box = await canvasBox(page)
+  await page.keyboard.press('r')
+  await drag(page, box, [80, 80], [220, 200])
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('save-file').click()])
+  expect(download.suggestedFilename()).toContain('.measured')
+  await expect(page.getByTestId('banner')).toContainText('Downloads')
+})

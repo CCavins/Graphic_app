@@ -1941,6 +1941,16 @@ Object.assign(cases, {
     app.undo()
     expect(app.doc.layers[0].children.length).toBe(0)
   },
+  'edit-tool-empty-hint'() {
+    const app = editor()
+    for (const tool of ['scissors', 'addAnchor', 'gradient'] as const) {
+      app.setTool(tool)
+      app.banner = null
+      app.pointerDown(pointer(400, 400))
+      app.pointerUp(pointer(400, 400))
+      expect(app.banner, tool).toMatch(/shape/)
+    }
+  },
   'mask-feedback'() {
     const app = editor()
     const node = makeRect(0, 0, 10, 10)

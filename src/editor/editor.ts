@@ -545,6 +545,9 @@ export class Editor {
       if (target) {
         if (this.tool === 'scissors') this.scissorsAt(target.id, raw)
         else this.addAnchorAt(target.id, raw)
+      } else {
+        this.banner = this.tool === 'scissors' ? 'Click on the outline of a shape to cut it there.' : 'Click on the outline of a shape to add an anchor point there.'
+        this.emit()
       }
       return
     }
@@ -555,7 +558,11 @@ export class Editor {
     }
     if (this.tool === 'gradient') {
       const node = this.one() ?? this.hit(raw, pointer)
-      if (!node) return
+      if (!node) {
+        this.banner = 'Select a shape, then drag across it to set the gradient direction.'
+        this.emit()
+        return
+      }
       this.selection = [node.id]
       this.drag = { kind: 'gradient', start: paper, origin: paper, ids: [node.id], origins: [], moved: false, pointerId: pointer.pointerId }
       this.emit()

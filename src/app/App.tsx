@@ -468,11 +468,24 @@ function Toolbar({ active, bottom, onPick }: { active: Tool; bottom: boolean; on
   )
 }
 
+async function saveDocument(): Promise<void> {
+  const name = `${editor.doc.name}.measured`
+  try {
+    const how = await saveWithPicker(name, editor.serialize())
+    if (how === 'download') editor.banner = `Saved ${name} to your Downloads folder.`
+    else if (how === 'picker') editor.banner = `Saved ${name}.`
+    else return
+  } catch (error) {
+    editor.banner = error instanceof Error ? error.message : 'The file could not be saved'
+  }
+  editor.emit()
+}
+
 function FileButtons({ onOpen, onDialog }: { onOpen: () => void; onDialog: (name: DialogName) => void }) {
   return (
     <>
       <button data-testid="open-file" title="Open a .measured, SVG, PDF, PSD, or image file" onClick={onOpen}>Open…</button>
-      <button data-testid="save-file" title="Save this document as a .measured file" onClick={() => void saveWithPicker(`${editor.doc.name}.measured`, editor.serialize())}>Save</button>
+      <button data-testid="save-file" title="Save this document as a .measured file" onClick={() => void saveDocument()}>Save</button>
       <button data-testid="export-open" title="Export as SVG, PDF, PNG, JPEG, GIF, TIFF, or PSD" onClick={() => onDialog('export')}>Export…</button>
       <button data-testid="plugins-open" title="Run or save small scripts that draw for you" onClick={() => onDialog('plugins')}>Plugins</button>
       <button data-testid="help-open" title="Help: how to use each tool and panel, shortcuts" aria-label="Help" onClick={() => onDialog('help')}>?</button>
